@@ -1,0 +1,4 @@
+.router-proxy-state.json
+config.yaml
+*.log
+*.exe

@@ -1,0 +1,43 @@
+proxy:
+  listen: 127.0.0.1:18080
+  # Optional. Bind direct connections to a local NIC IP to avoid a TUN adapter
+  # becoming the default route for direct traffic. Leave empty to use OS routing.
+  direct_bind_ip:
+
+vpn:
+  tyty:
+    exe: C:\Program Files\Tyty\Tyty.exe
+    process: Tyty
+    adapter_keywords:
+      - Mihomo
+      - Meta Tunnel
+  globalprotect:
+    exe: C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe
+    process: PanGPA
+    adapter_keywords:
+      - PANGP
+      - GlobalProtect
+
+rules:
+  # Company domains. Matched requests start GlobalProtect.
+  company_domains:
+    - company.example.com
+    - "*.corp.example.com"
+
+  # Foreign domains. Matched requests start Tyty.
+  foreign_domains:
+    - google.com
+    - "*.google.com"
+    - github.com
+    - "*.github.com"
+    - chatgpt.com
+    - "*.chatgpt.com"
+    - openai.com
+    - "*.openai.com"
+    - cursor.sh
+    - "*.cursor.sh"
+
+  # Always direct. This has the highest priority.
+  direct_domains:
+    - localhost
+    - "*.local"
