@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
 	"syscall"
+
+	"domain-vpn-router/internal/hiddenexec"
 )
 
 type State struct {
@@ -78,7 +79,7 @@ func readCurrent() (State, error) {
 }
 
 func regQuery() (map[string]string, error) {
-	out, err := exec.Command("reg", "query", internetSettingsKey).CombinedOutput()
+	out, err := hiddenexec.Command("reg", "query", internetSettingsKey).CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("读取系统代理注册表失败: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -137,7 +138,7 @@ func restoreValueSZ(name string, value *string) error {
 }
 
 func regAddDWORD(name, value string) error {
-	out, err := exec.Command("reg", "add", internetSettingsKey, "/v", name, "/t", "REG_DWORD", "/d", value, "/f").CombinedOutput()
+	out, err := hiddenexec.Command("reg", "add", internetSettingsKey, "/v", name, "/t", "REG_DWORD", "/d", value, "/f").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("写入 %s 失败: %w: %s", name, err, strings.TrimSpace(string(out)))
 	}
@@ -145,7 +146,7 @@ func regAddDWORD(name, value string) error {
 }
 
 func regAddSZ(name, value string) error {
-	out, err := exec.Command("reg", "add", internetSettingsKey, "/v", name, "/t", "REG_SZ", "/d", value, "/f").CombinedOutput()
+	out, err := hiddenexec.Command("reg", "add", internetSettingsKey, "/v", name, "/t", "REG_SZ", "/d", value, "/f").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("写入 %s 失败: %w: %s", name, err, strings.TrimSpace(string(out)))
 	}
@@ -153,7 +154,7 @@ func regAddSZ(name, value string) error {
 }
 
 func regDelete(name string) error {
-	out, err := exec.Command("reg", "delete", internetSettingsKey, "/v", name, "/f").CombinedOutput()
+	out, err := hiddenexec.Command("reg", "delete", internetSettingsKey, "/v", name, "/f").CombinedOutput()
 	if err != nil {
 		text := strings.TrimSpace(string(out))
 		if strings.Contains(text, "找不到") || strings.Contains(strings.ToLower(text), "unable to find") {

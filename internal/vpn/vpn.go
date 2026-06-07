@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os/exec"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"domain-vpn-router/internal/config"
+	"domain-vpn-router/internal/hiddenexec"
 )
 
 type Manager struct {
@@ -66,7 +66,7 @@ func (m *Manager) ensure(ctx context.Context, name string, endpoint config.VPNEn
 	}
 	if !running {
 		log.Printf("正在启动 %s: %s", name, endpoint.Exe)
-		if err := exec.CommandContext(ctx, endpoint.Exe).Start(); err != nil {
+		if err := hiddenexec.CommandContext(ctx, endpoint.Exe).Start(); err != nil {
 			return fmt.Errorf("启动 %s 失败: %w", name, err)
 		}
 	} else {
@@ -95,13 +95,13 @@ func (m *Manager) stop(ctx context.Context, name string, endpoint config.VPNEndp
 
 	if strings.TrimSpace(endpoint.StopCommand) != "" {
 		log.Printf("正在运行 %s 关闭命令", name)
-		return exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", endpoint.StopCommand).Run()
+		return hiddenexec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", endpoint.StopCommand).Run()
 	}
 	if endpoint.Process == "" || runtime.GOOS != "windows" {
 		return nil
 	}
 	log.Printf("正在尝试优雅关闭 %s", name)
-	out, err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", "$p=Get-Process -Name '"+escapePS(endpoint.Process)+"' -ErrorAction SilentlyContinue; if($p){ $p | ForEach-Object { $_.CloseMainWindow() | Out-Null } }").CombinedOutput()
+	out, err := hiddenexec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", "$p=Get-Process -Name '"+escapePS(endpoint.Process)+"' -ErrorAction SilentlyContinue; if($p){ $p | ForEach-Object { $_.CloseMainWindow() | Out-Null } }").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("关闭 %s 失败: %w: %s", name, err, strings.TrimSpace(string(out)))
 	}
@@ -115,7 +115,7 @@ func processRunning(ctx context.Context, process string) (bool, error) {
 	if runtime.GOOS != "windows" {
 		return false, nil
 	}
-	out, err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", "Get-Process -Name '"+escapePS(process)+"' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty ProcessName").Output()
+	out, err := hiddenexec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", "Get-Process -Name '"+escapePS(process)+"' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty ProcessName").Output()
 	if err != nil {
 		return false, err
 	}
@@ -126,7 +126,7 @@ func adapterUp(ctx context.Context, keywords []string) (bool, error) {
 	if runtime.GOOS != "windows" {
 		return false, nil
 	}
-	out, err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", "Get-NetAdapter | Select-Object Name,InterfaceDescription,Status | ConvertTo-Csv -NoTypeInformation").Output()
+	out, err := hiddenexec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", "Get-NetAdapter | Select-Object Name,InterfaceDescription,Status | ConvertTo-Csv -NoTypeInformation").Output()
 	if err != nil {
 		return false, err
 	}
