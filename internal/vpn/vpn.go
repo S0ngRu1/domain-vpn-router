@@ -30,6 +30,24 @@ func (m *Manager) EnsureGlobalProtect(ctx context.Context) error {
 	return m.ensure(ctx, "GlobalProtect", m.cfg.GlobalProtect)
 }
 
+func (m *Manager) StopTyty(ctx context.Context) error {
+	return m.stop(ctx, "Tyty", m.cfg.Tyty)
+}
+
+func (m *Manager) StopGlobalProtect(ctx context.Context) error {
+	return m.stop(ctx, "GlobalProtect", m.cfg.GlobalProtect)
+}
+
+func (m *Manager) TytyUp(ctx context.Context) bool {
+	up, _ := adapterUp(ctx, m.cfg.Tyty.AdapterKeywords)
+	return up
+}
+
+func (m *Manager) GlobalProtectUp(ctx context.Context) bool {
+	up, _ := adapterUp(ctx, m.cfg.GlobalProtect.AdapterKeywords)
+	return up
+}
+
 func (m *Manager) ensure(ctx context.Context, name string, endpoint config.VPNEndpoint) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -69,6 +87,25 @@ func (m *Manager) ensure(ctx context.Context, name string, endpoint config.VPNEn
 		}
 	}
 	return fmt.Errorf("%s 已启动，但等待网卡连接超时；如需要登录，请在官方客户端完成后重试", name)
+}
+
+func (m *Manager) stop(ctx context.Context, name string, endpoint config.VPNEndpoint) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if strings.TrimSpace(endpoint.StopCommand) != "" {
+		log.Printf("正在运行 %s 关闭命令", name)
+		return exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", endpoint.StopCommand).Run()
+	}
+	if endpoint.Process == "" || runtime.GOOS != "windows" {
+		return nil
+	}
+	log.Printf("正在尝试优雅关闭 %s", name)
+	out, err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", "$p=Get-Process -Name '"+escapePS(endpoint.Process)+"' -ErrorAction SilentlyContinue; if($p){ $p | ForEach-Object { $_.CloseMainWindow() | Out-Null } }").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("关闭 %s 失败: %w: %s", name, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func processRunning(ctx context.Context, process string) (bool, error) {

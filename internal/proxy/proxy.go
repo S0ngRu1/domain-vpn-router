@@ -11,20 +11,21 @@ import (
 	"time"
 
 	"domain-vpn-router/internal/rules"
-	"domain-vpn-router/internal/vpn"
 )
+
+type Router interface {
+	Route(ctx context.Context, target string) (rules.Match, error)
+}
 
 type Server struct {
 	server       *http.Server
-	matcher      *rules.Matcher
-	vpn          *vpn.Manager
+	router       Router
 	directBindIP net.IP
 }
 
-func New(listen, directBindIP string, matcher *rules.Matcher, manager *vpn.Manager) *Server {
+func New(listen, directBindIP string, router Router) *Server {
 	s := &Server{
-		matcher:      matcher,
-		vpn:          manager,
+		router:       router,
 		directBindIP: net.ParseIP(strings.TrimSpace(directBindIP)),
 	}
 	s.server = &http.Server{
@@ -52,30 +53,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodConnect {
 		target = r.URL.Host
 	}
-	match := s.matcher.Match(target)
-	log.Printf("访问目标=%s 动作=%s 规则=%s", target, match.Action, match.Rule)
-
-	if err := s.ensureMode(r.Context(), match); err != nil {
+	match, err := s.router.Route(r.Context(), target)
+	if err != nil {
 		http.Error(w, "切换网络失败: "+err.Error(), http.StatusBadGateway)
 		return
 	}
+	log.Printf("访问目标=%s 动作=%s 规则=%s", target, match.Action, match.Rule)
 
 	if r.Method == http.MethodConnect {
 		s.handleConnect(w, r, match)
 		return
 	}
 	s.handleHTTP(w, r, match)
-}
-
-func (s *Server) ensureMode(ctx context.Context, match rules.Match) error {
-	switch match.Action {
-	case rules.ActionCompany:
-		return s.vpn.EnsureGlobalProtect(ctx)
-	case rules.ActionForeign:
-		return s.vpn.EnsureTyty(ctx)
-	default:
-		return nil
-	}
 }
 
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request, match rules.Match) {

@@ -8,9 +8,17 @@ import (
 )
 
 type Config struct {
+	App   AppConfig
 	Proxy ProxyConfig
 	VPN   VPNConfig
 	Rules RulesConfig
+}
+
+type AppConfig struct {
+	StartMode         string
+	MinimizeToTray    bool
+	ShowWindowOnStart bool
+	LogFile           string
 }
 
 type ProxyConfig struct {
@@ -26,6 +34,7 @@ type VPNConfig struct {
 type VPNEndpoint struct {
 	Exe             string
 	Process         string
+	StopCommand     string
 	AdapterKeywords []string
 }
 
@@ -103,6 +112,14 @@ func Load(path string) (Config, error) {
 
 		list = ""
 		switch {
+		case section == "app" && key == "start_mode":
+			cfg.App.StartMode = value
+		case section == "app" && key == "minimize_to_tray":
+			cfg.App.MinimizeToTray = parseBool(value)
+		case section == "app" && key == "show_window_on_start":
+			cfg.App.ShowWindowOnStart = parseBool(value)
+		case section == "app" && key == "log_file":
+			cfg.App.LogFile = value
 		case section == "proxy" && key == "listen":
 			cfg.Proxy.Listen = value
 		case section == "proxy" && key == "direct_bind_ip":
@@ -111,10 +128,14 @@ func Load(path string) (Config, error) {
 			cfg.VPN.Tyty.Exe = value
 		case section == "vpn" && subsection == "tyty" && key == "process":
 			cfg.VPN.Tyty.Process = value
+		case section == "vpn" && subsection == "tyty" && key == "stop_command":
+			cfg.VPN.Tyty.StopCommand = value
 		case section == "vpn" && subsection == "globalprotect" && key == "exe":
 			cfg.VPN.GlobalProtect.Exe = value
 		case section == "vpn" && subsection == "globalprotect" && key == "process":
 			cfg.VPN.GlobalProtect.Process = value
+		case section == "vpn" && subsection == "globalprotect" && key == "stop_command":
+			cfg.VPN.GlobalProtect.StopCommand = value
 		default:
 			return Config{}, fmt.Errorf("未知配置项: %s", raw)
 		}
@@ -125,6 +146,10 @@ func Load(path string) (Config, error) {
 	if cfg.Proxy.Listen == "" {
 		return Config{}, fmt.Errorf("缺少 proxy.listen")
 	}
+	if cfg.App.StartMode == "" {
+		cfg.App.StartMode = "auto"
+	}
+	cfg.App.MinimizeToTray = true
 	if cfg.VPN.Tyty.Exe == "" {
 		return Config{}, fmt.Errorf("缺少 vpn.tyty.exe")
 	}
@@ -144,6 +169,15 @@ func Load(path string) (Config, error) {
 		cfg.VPN.GlobalProtect.AdapterKeywords = []string{"PANGP", "GlobalProtect"}
 	}
 	return cfg, nil
+}
+
+func parseBool(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func stripComment(line string) string {

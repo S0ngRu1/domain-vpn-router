@@ -1,3 +1,10 @@
+app:
+  start_mode: auto
+  minimize_to_tray: true
+  show_window_on_start: false
+  # Optional. Empty means logs are kept in memory only.
+  log_file:
+
 proxy:
   listen: 127.0.0.1:18080
   # Optional. Bind direct connections to a local NIC IP to avoid a TUN adapter
@@ -8,12 +15,16 @@ vpn:
   tyty:
     exe: C:\Program Files\Tyty\Tyty.exe
     process: Tyty
+    # Optional PowerShell command used before switching to GlobalProtect.
+    stop_command:
     adapter_keywords:
       - Mihomo
       - Meta Tunnel
   globalprotect:
     exe: C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe
     process: PanGPA
+    # Optional PowerShell command used before switching to Tyty.
+    stop_command:
     adapter_keywords:
       - PANGP
       - GlobalProtect

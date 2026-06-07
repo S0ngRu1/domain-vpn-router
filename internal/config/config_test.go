@@ -9,18 +9,24 @@ import (
 func TestLoadConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	body := `proxy:
+	body := `app:
+  start_mode: tyty
+  minimize_to_tray: true
+  show_window_on_start: true
+proxy:
   listen: 127.0.0.1:18080
   direct_bind_ip: 192.168.1.186
 vpn:
   tyty:
     exe: C:\Program Files\Tyty\Tyty.exe
     process: Tyty
+    stop_command: Write-Output stop-tyty
     adapter_keywords:
       - Mihomo
   globalprotect:
     exe: C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe
     process: PanGPA
+    stop_command: Write-Output stop-gp
     adapter_keywords:
       - PANGP
 rules:
@@ -43,6 +49,12 @@ rules:
 	}
 	if cfg.Proxy.DirectBindIP != "192.168.1.186" {
 		t.Fatalf("unexpected direct bind ip: %s", cfg.Proxy.DirectBindIP)
+	}
+	if cfg.App.StartMode != "tyty" || !cfg.App.ShowWindowOnStart || !cfg.App.MinimizeToTray {
+		t.Fatalf("unexpected app config: %#v", cfg.App)
+	}
+	if cfg.VPN.Tyty.StopCommand == "" || cfg.VPN.GlobalProtect.StopCommand == "" {
+		t.Fatalf("stop command should be loaded")
 	}
 	if cfg.VPN.Tyty.Exe == "" || cfg.VPN.GlobalProtect.Exe == "" {
 		t.Fatalf("vpn exe should be loaded")
