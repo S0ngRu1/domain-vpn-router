@@ -44,3 +44,12 @@ func TestDirectRulesHaveHighestPriority(t *testing.T) {
 		t.Fatalf("direct should win, got %s", got.Action)
 	}
 }
+
+func TestOnlyLocalDirectIsProtectedFromForcedModes(t *testing.T) {
+	if IsLocalDirect(Match{Action: ActionDirect, Rule: "default"}) {
+		t.Fatal("default direct should be overridable by forced modes")
+	}
+	if !IsLocalDirect(Match{Action: ActionDirect, Rule: "private-ip"}) {
+		t.Fatal("private IP direct should stay local in forced modes")
+	}
+}

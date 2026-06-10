@@ -10,6 +10,8 @@ proxy:
   # Optional. Bind direct connections to a local NIC IP to avoid a TUN adapter
   # becoming the default route for direct traffic. Leave empty to use OS routing.
   direct_bind_ip:
+  # Optional. Forward foreign traffic to the local mixed-port of Tyty / Mihomo.
+  foreign_proxy:
 
 vpn:
   tyty:

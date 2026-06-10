@@ -24,6 +24,7 @@ type AppConfig struct {
 type ProxyConfig struct {
 	Listen       string
 	DirectBindIP string
+	ForeignProxy string
 }
 
 type VPNConfig struct {
@@ -124,6 +125,8 @@ func Load(path string) (Config, error) {
 			cfg.Proxy.Listen = value
 		case section == "proxy" && key == "direct_bind_ip":
 			cfg.Proxy.DirectBindIP = value
+		case section == "proxy" && key == "foreign_proxy":
+			cfg.Proxy.ForeignProxy = value
 		case section == "vpn" && subsection == "tyty" && key == "exe":
 			cfg.VPN.Tyty.Exe = value
 		case section == "vpn" && subsection == "tyty" && key == "process":
@@ -169,6 +172,33 @@ func Load(path string) (Config, error) {
 		cfg.VPN.GlobalProtect.AdapterKeywords = []string{"PANGP", "GlobalProtect"}
 	}
 	return cfg, nil
+}
+
+func UpdateProxyDirectBindIP(path, value string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	inProxy := false
+	updated := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(stripComment(line))
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if indent == 0 && strings.HasSuffix(trimmed, ":") {
+			inProxy = strings.TrimSuffix(trimmed, ":") == "proxy"
+			continue
+		}
+		if inProxy && indent == 2 && strings.HasPrefix(trimmed, "direct_bind_ip:") {
+			lines[i] = "  direct_bind_ip: " + value
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		return fmt.Errorf("未找到 proxy.direct_bind_ip")
+	}
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600)
 }
 
 func parseBool(s string) bool {

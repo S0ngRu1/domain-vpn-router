@@ -35,7 +35,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	controller := app.NewController(cfg, *statePath)
+	controller := app.NewController(cfg, *configPath, *statePath)
 	if err := gui.Run(ctx, controller, cfg.App.ShowWindowOnStart); err != nil {
 		fmt.Printf("程序运行失败: %v\n", err)
 	}

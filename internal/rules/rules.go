@@ -20,6 +20,10 @@ type Match struct {
 	Rule   string
 }
 
+func IsLocalDirect(match Match) bool {
+	return match.Action == ActionDirect && (match.Rule == "empty-host" || match.Rule == "private-ip")
+}
+
 type Matcher struct {
 	company []string
 	foreign []string

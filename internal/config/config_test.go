@@ -16,6 +16,7 @@ func TestLoadConfig(t *testing.T) {
 proxy:
   listen: 127.0.0.1:18080
   direct_bind_ip: 192.168.1.186
+  foreign_proxy: 127.0.0.1:9674
 vpn:
   tyty:
     exe: C:\Program Files\Tyty\Tyty.exe
@@ -49,6 +50,9 @@ rules:
 	}
 	if cfg.Proxy.DirectBindIP != "192.168.1.186" {
 		t.Fatalf("unexpected direct bind ip: %s", cfg.Proxy.DirectBindIP)
+	}
+	if cfg.Proxy.ForeignProxy != "127.0.0.1:9674" {
+		t.Fatalf("unexpected foreign proxy: %s", cfg.Proxy.ForeignProxy)
 	}
 	if cfg.App.StartMode != "tyty" || !cfg.App.ShowWindowOnStart || !cfg.App.MinimizeToTray {
 		t.Fatalf("unexpected app config: %#v", cfg.App)

@@ -27,6 +27,7 @@ const (
 type Status struct {
 	Mode          Mode
 	ProxyListen   string
+	DirectBindIP  string
 	ProxyRunning  bool
 	SystemProxyOn bool
 	TytyUp        bool
@@ -36,12 +37,13 @@ type Status struct {
 }
 
 type Controller struct {
-	cfg       config.Config
-	statePath string
-	matcher   *rules.Matcher
-	manager   *vpn.Manager
-	proxy     *proxy.Server
-	logs      *LogBuffer
+	cfg        config.Config
+	configPath string
+	statePath  string
+	matcher    *rules.Matcher
+	manager    *vpn.Manager
+	proxy      *proxy.Server
+	logs       *LogBuffer
 
 	mu            sync.Mutex
 	mode          Mode
@@ -52,15 +54,16 @@ type Controller struct {
 	shutdownOnce  sync.Once
 }
 
-func NewController(cfg config.Config, statePath string) *Controller {
+func NewController(cfg config.Config, configPath, statePath string) *Controller {
 	mode := NormalizeMode(cfg.App.StartMode)
 	return &Controller{
-		cfg:       cfg,
-		statePath: statePath,
-		matcher:   rules.NewMatcher(cfg.Rules),
-		manager:   vpn.NewManager(cfg.VPN),
-		logs:      NewLogBuffer(100),
-		mode:      mode,
+		cfg:        cfg,
+		configPath: configPath,
+		statePath:  statePath,
+		matcher:    rules.NewMatcher(cfg.Rules),
+		manager:    vpn.NewManager(cfg.VPN),
+		logs:       NewLogBuffer(100),
+		mode:       mode,
 	}
 }
 
@@ -83,7 +86,7 @@ func (c *Controller) Start(ctx context.Context) error {
 		c.mu.Unlock()
 		return nil
 	}
-	c.proxy = proxy.New(c.cfg.Proxy.Listen, c.cfg.Proxy.DirectBindIP, c)
+	c.proxy = proxy.New(c.cfg.Proxy.Listen, c.cfg.Proxy.DirectBindIP, c.cfg.Proxy.ForeignProxy, c)
 	c.started = true
 	c.mu.Unlock()
 
@@ -138,11 +141,11 @@ func (c *Controller) Route(ctx context.Context, target string) (rules.Match, err
 
 	switch mode {
 	case ModeTyty:
-		if match.Action != rules.ActionDirect {
+		if !rules.IsLocalDirect(match) {
 			match = rules.Match{Action: rules.ActionForeign, Rule: "manual-tyty"}
 		}
 	case ModeGlobalProtect:
-		if match.Action != rules.ActionDirect {
+		if !rules.IsLocalDirect(match) {
 			match = rules.Match{Action: rules.ActionCompany, Rule: "manual-globalprotect"}
 		}
 	case ModeDirect:
@@ -150,14 +153,16 @@ func (c *Controller) Route(ctx context.Context, target string) (rules.Match, err
 	}
 
 	c.addLog("访问目标=%s 动作=%s 规则=%s 模式=%s", target, match.Action, match.Rule, mode)
+	switchCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	switch match.Action {
 	case rules.ActionCompany:
-		if err := c.manager.EnsureGlobalProtect(ctx); err != nil {
+		if err := c.manager.EnsureGlobalProtect(switchCtx); err != nil {
 			c.setError("切换 GlobalProtect 失败: %v", err)
 			return match, err
 		}
 	case rules.ActionForeign:
-		if err := c.manager.EnsureTyty(ctx); err != nil {
+		if err := c.manager.EnsureTyty(switchCtx); err != nil {
 			c.setError("切换 Tyty 失败: %v", err)
 			return match, err
 		}
@@ -219,19 +224,50 @@ func (c *Controller) Mode() Mode {
 }
 
 func (c *Controller) Status(ctx context.Context) Status {
+	status := c.StatusSnapshot()
+	status.TytyUp = c.manager.TytyUp(ctx)
+	status.GlobalUp = c.manager.GlobalProtectUp(ctx)
+	return status
+}
+
+func (c *Controller) StatusSnapshot() Status {
 	c.mu.Lock()
-	status := Status{
+	defer c.mu.Unlock()
+	return Status{
 		Mode:          c.mode,
 		ProxyListen:   c.cfg.Proxy.Listen,
+		DirectBindIP:  c.cfg.Proxy.DirectBindIP,
 		ProxyRunning:  c.proxyRunning,
 		SystemProxyOn: c.systemProxyOn,
 		LastError:     c.lastError,
 		Logs:          c.logs.Entries(),
 	}
+}
+
+func (c *Controller) DirectBindIP() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cfg.Proxy.DirectBindIP
+}
+
+func (c *Controller) UpdateDirectBindIP(value string) error {
+	value = strings.TrimSpace(value)
+	c.mu.Lock()
+	c.cfg.Proxy.DirectBindIP = value
+	p := c.proxy
+	configPath := c.configPath
 	c.mu.Unlock()
-	status.TytyUp = c.manager.TytyUp(ctx)
-	status.GlobalUp = c.manager.GlobalProtectUp(ctx)
-	return status
+	if p != nil {
+		p.SetDirectBindIP(value)
+	}
+	if configPath != "" {
+		if err := config.UpdateProxyDirectBindIP(configPath, value); err != nil {
+			c.setError("保存直连绑定 IP 失败: %v", err)
+			return err
+		}
+	}
+	c.addLog("直连绑定 IP 已更新: %s", value)
+	return nil
 }
 
 func (c *Controller) StatusText(ctx context.Context) string {
