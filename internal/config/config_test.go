@@ -84,3 +84,26 @@ func TestLoadConfigRequiresListen(t *testing.T) {
 		t.Fatalf("expected error")
 	}
 }
+
+func TestLoadConfigAllowsUTF8BOM(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "\ufeff" + `proxy:
+  listen: 127.0.0.1:18080
+vpn:
+  tyty:
+    exe: C:\Program Files\Tyty\Tyty.exe
+  globalprotect:
+    exe: C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Proxy.Listen != "127.0.0.1:18080" {
+		t.Fatalf("unexpected listen: %s", cfg.Proxy.Listen)
+	}
+}

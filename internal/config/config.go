@@ -57,6 +57,7 @@ func Load(path string) (Config, error) {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		raw := scanner.Text()
+		raw = strings.TrimPrefix(raw, "\ufeff")
 		line := stripComment(raw)
 		if strings.TrimSpace(line) == "" {
 			continue

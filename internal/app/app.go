@@ -87,11 +87,18 @@ func (c *Controller) Start(ctx context.Context) error {
 		return nil
 	}
 	c.proxy = proxy.New(c.cfg.Proxy.Listen, c.cfg.Proxy.DirectBindIP, c.cfg.Proxy.ForeignProxy, c)
+	listener, err := c.proxy.Listen()
+	if err != nil {
+		c.mu.Unlock()
+		c.setError("代理服务启动失败: %v", err)
+		return err
+	}
 	c.started = true
 	c.mu.Unlock()
 
 	if c.Mode() != ModeDirect {
 		if err := systemproxy.Enable(c.cfg.Proxy.Listen, c.statePath); err != nil {
+			_ = listener.Close()
 			c.setError("设置系统代理失败: %v", err)
 			return err
 		}
@@ -100,7 +107,7 @@ func (c *Controller) Start(ctx context.Context) error {
 
 	go func() {
 		c.addLog("域名分流代理已启动: %s", c.cfg.Proxy.Listen)
-		if err := c.proxy.ListenAndServe(); err != nil {
+		if err := c.proxy.Serve(listener); err != nil {
 			c.setError("代理服务失败: %v", err)
 		}
 	}()
@@ -152,7 +159,7 @@ func (c *Controller) Route(ctx context.Context, target string) (rules.Match, err
 		match = rules.Match{Action: rules.ActionDirect, Rule: "manual-direct"}
 	}
 
-	c.addLog("访问目标=%s 动作=%s 规则=%s 模式=%s", target, match.Action, match.Rule, mode)
+	c.addLog("路径=%s 目标=%s 动作=%s 规则=%s 模式=%s", routePathName(match.Action), target, match.Action, match.Rule, mode)
 	switchCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	switch match.Action {
@@ -168,6 +175,17 @@ func (c *Controller) Route(ctx context.Context, target string) (rules.Match, err
 		}
 	}
 	return match, nil
+}
+
+func routePathName(action rules.Action) string {
+	switch action {
+	case rules.ActionForeign:
+		return "Tyty"
+	case rules.ActionCompany:
+		return "GlobalProtect"
+	default:
+		return "本地直连"
+	}
 }
 
 func (c *Controller) ApplyMode(ctx context.Context, mode Mode) error {

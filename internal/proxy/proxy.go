@@ -56,6 +56,18 @@ func (s *Server) ListenAndServe() error {
 	return err
 }
 
+func (s *Server) Listen() (net.Listener, error) {
+	return net.Listen("tcp", s.server.Addr)
+}
+
+func (s *Server) Serve(listener net.Listener) error {
+	err := s.server.Serve(listener)
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
+}
+
 func (s *Server) Shutdown(ctx context.Context) error {
 	return s.server.Shutdown(ctx)
 }
@@ -70,7 +82,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "切换网络失败: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	log.Printf("访问目标=%s 动作=%s 规则=%s", target, match.Action, match.Rule)
+	log.Printf("路径=%s 目标=%s 动作=%s 规则=%s", routePathName(match.Action), target, match.Action, match.Rule)
 
 	if r.Method == http.MethodConnect {
 		s.handleConnect(w, r, match)
@@ -310,4 +322,15 @@ func parseDirectBindIP(directBindIP string) net.IP {
 		return nil
 	}
 	return ip
+}
+
+func routePathName(action rules.Action) string {
+	switch action {
+	case rules.ActionForeign:
+		return "Tyty"
+	case rules.ActionCompany:
+		return "GlobalProtect"
+	default:
+		return "本地直连"
+	}
 }

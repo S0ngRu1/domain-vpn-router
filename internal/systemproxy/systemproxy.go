@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"unicode/utf16"
 
 	"domain-vpn-router/internal/hiddenexec"
 )
@@ -28,8 +29,13 @@ func Enable(listen, statePath string) error {
 	if err != nil {
 		return err
 	}
-	if err := saveState(statePath, state); err != nil {
-		return err
+	if _, err := os.Stat(statePath); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := saveState(statePath, state); err != nil {
+			return err
+		}
 	}
 	if err := regAddDWORD("ProxyEnable", "1"); err != nil {
 		return err
@@ -63,6 +69,7 @@ func Restore(statePath string) error {
 	if err := notifyWindows(); err != nil {
 		return err
 	}
+	_ = os.Remove(statePath)
 	return nil
 }
 
@@ -81,10 +88,10 @@ func readCurrent() (State, error) {
 func regQuery() (map[string]string, error) {
 	out, err := hiddenexec.Command("reg", "query", internetSettingsKey).CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("读取系统代理注册表失败: %w: %s", err, strings.TrimSpace(string(out)))
+		return nil, fmt.Errorf("读取系统代理注册表失败: %w: %s", err, cleanCommandOutput(out))
 	}
 	values := map[string]string{}
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(cleanCommandOutput(out), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) >= 3 {
 			values[fields[0]] = strings.Join(fields[2:], " ")
@@ -140,7 +147,7 @@ func restoreValueSZ(name string, value *string) error {
 func regAddDWORD(name, value string) error {
 	out, err := hiddenexec.Command("reg", "add", internetSettingsKey, "/v", name, "/t", "REG_DWORD", "/d", value, "/f").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("写入 %s 失败: %w: %s", name, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("写入 %s 失败: %w: %s", name, err, cleanCommandOutput(out))
 	}
 	return nil
 }
@@ -148,7 +155,7 @@ func regAddDWORD(name, value string) error {
 func regAddSZ(name, value string) error {
 	out, err := hiddenexec.Command("reg", "add", internetSettingsKey, "/v", name, "/t", "REG_SZ", "/d", value, "/f").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("写入 %s 失败: %w: %s", name, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("写入 %s 失败: %w: %s", name, err, cleanCommandOutput(out))
 	}
 	return nil
 }
@@ -156,13 +163,72 @@ func regAddSZ(name, value string) error {
 func regDelete(name string) error {
 	out, err := hiddenexec.Command("reg", "delete", internetSettingsKey, "/v", name, "/f").CombinedOutput()
 	if err != nil {
-		text := strings.TrimSpace(string(out))
-		if strings.Contains(text, "找不到") || strings.Contains(strings.ToLower(text), "unable to find") {
+		text := cleanCommandOutput(out)
+		if isMissingRegistryValue(text) {
 			return nil
 		}
 		return fmt.Errorf("删除 %s 失败: %w: %s", name, err, text)
 	}
 	return nil
+}
+
+func isMissingRegistryValue(text string) bool {
+	text = strings.ToLower(text)
+	markers := []string{
+		"找不到",
+		"指定的注册表项或值",
+		"unable to find",
+		"cannot find",
+		"not found",
+		"does not exist",
+	}
+	for _, marker := range markers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func cleanCommandOutput(out []byte) string {
+	text := decodeCommandOutput(out)
+	return strings.TrimSpace(strings.ReplaceAll(text, "\x00", ""))
+}
+
+func decodeCommandOutput(out []byte) string {
+	if len(out) >= 2 {
+		if out[0] == 0xff && out[1] == 0xfe {
+			return utf16BytesToString(out[2:], false)
+		}
+		if out[0] == 0xfe && out[1] == 0xff {
+			return utf16BytesToString(out[2:], true)
+		}
+	}
+	zeroCount := 0
+	for _, b := range out {
+		if b == 0 {
+			zeroCount++
+		}
+	}
+	if len(out) > 0 && zeroCount*4 > len(out) {
+		return utf16BytesToString(out, false)
+	}
+	return string(out)
+}
+
+func utf16BytesToString(out []byte, bigEndian bool) string {
+	if len(out)%2 == 1 {
+		out = out[:len(out)-1]
+	}
+	words := make([]uint16, 0, len(out)/2)
+	for i := 0; i < len(out); i += 2 {
+		if bigEndian {
+			words = append(words, uint16(out[i])<<8|uint16(out[i+1]))
+		} else {
+			words = append(words, uint16(out[i])|uint16(out[i+1])<<8)
+		}
+	}
+	return string(utf16.Decode(words))
 }
 
 func notifyWindows() error {

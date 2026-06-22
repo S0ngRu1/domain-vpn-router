@@ -45,6 +45,12 @@ rules:
     - "*.github.com"
     - chatgpt.com
     - "*.chatgpt.com"
+    - claude.com
+    - "*.claude.com"
+    - claude.ai
+    - "*.claude.ai"
+    - anthropic.com
+    - "*.anthropic.com"
     - openai.com
     - "*.openai.com"
     - cursor.sh
