@@ -162,6 +162,9 @@ func (c *Controller) Route(ctx context.Context, target string) (rules.Match, err
 			return match, err
 		}
 	case rules.ActionForeign:
+		if strings.TrimSpace(c.cfg.Proxy.ForeignProxy) != "" {
+			return match, nil
+		}
 		if err := c.manager.EnsureTyty(switchCtx); err != nil {
 			c.setError("切换 Tyty 失败: %v", err)
 			return match, err

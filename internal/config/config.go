@@ -63,6 +63,7 @@ func Load(path string) (Config, error) {
 		}
 		indent := len(line) - len(strings.TrimLeft(line, " "))
 		trimmed := strings.TrimSpace(line)
+		trimmed = strings.TrimPrefix(trimmed, "\ufeff")
 
 		if strings.HasPrefix(trimmed, "- ") {
 			item := unquote(strings.TrimSpace(strings.TrimPrefix(trimmed, "- ")))
