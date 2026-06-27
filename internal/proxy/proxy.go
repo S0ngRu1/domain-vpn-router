@@ -20,19 +20,27 @@ type Router interface {
 	Route(ctx context.Context, target string) (rules.Match, error)
 }
 
-type Server struct {
-	server       *http.Server
-	router       Router
-	directBindIP net.IP
-	foreignProxy string
-	mu           sync.RWMutex
+// companyIPer 是可选接口：若 Router 实现了它，公司流量会显式绑定到 GP 网卡 IP，
+// 避免 Mihomo TUN 路由优先级更高时把公司流量错误地带进 Tyty 隧道。
+type companyIPer interface {
+	CompanyAdapterIP() net.IP
 }
 
-func New(listen, directBindIP, foreignProxy string, router Router) *Server {
+type Server struct {
+	server          *http.Server
+	router          Router
+	directBindIPStr string   // 配置的静态 IP（空 = 自动检测）
+	foreignProxy    string
+	excludeAdapters []string // 动态检测时排除的网卡名称关键词
+	mu              sync.RWMutex
+}
+
+func New(listen, directBindIP, foreignProxy string, router Router, excludeAdapters []string) *Server {
 	s := &Server{
-		router:       router,
-		directBindIP: parseDirectBindIP(directBindIP),
-		foreignProxy: strings.TrimSpace(foreignProxy),
+		router:          router,
+		directBindIPStr: strings.TrimSpace(directBindIP),
+		foreignProxy:    strings.TrimSpace(foreignProxy),
+		excludeAdapters: excludeAdapters,
 	}
 	s.server = &http.Server{
 		Addr:              listen,
@@ -45,7 +53,7 @@ func New(listen, directBindIP, foreignProxy string, router Router) *Server {
 func (s *Server) SetDirectBindIP(directBindIP string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.directBindIP = parseDirectBindIP(directBindIP)
+	s.directBindIPStr = strings.TrimSpace(directBindIP)
 }
 
 func (s *Server) ListenAndServe() error {
@@ -152,13 +160,20 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, match rules.
 }
 
 func (s *Server) dial(ctx context.Context, action rules.Action, address string) (net.Conn, error) {
-	bindIP := s.currentDirectBindIP()
+	bindIP := s.currentPhysicalIP()
 	dialer := &net.Dialer{
 		Timeout:   15 * time.Second,
 		KeepAlive: 30 * time.Second,
 	}
 	if action == rules.ActionDirect && bindIP != nil {
 		dialer.LocalAddr = &net.TCPAddr{IP: bindIP}
+	}
+	if action == rules.ActionCompany {
+		if r, ok := s.router.(companyIPer); ok {
+			if ip := r.CompanyAdapterIP(); ip != nil {
+				dialer.LocalAddr = &net.TCPAddr{IP: ip}
+			}
+		}
 	}
 	if action == rules.ActionDirect {
 		if resolved, err := s.resolveAddress(ctx, address, bindIP); err == nil {
@@ -226,13 +241,66 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 	return c.Conn.Read(p)
 }
 
-func (s *Server) currentDirectBindIP() net.IP {
+// currentPhysicalIP 返回直连流量应绑定的本地 IP。
+// 优先使用配置的静态 IP（仍然有效时），否则动态扫描物理网卡。
+func (s *Server) currentPhysicalIP() net.IP {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.directBindIP == nil {
+	static := s.directBindIPStr
+	exclude := s.excludeAdapters
+	s.mu.RUnlock()
+	if ip := parseDirectBindIP(static); ip != nil {
+		return ip
+	}
+	return dynamicPhysicalIP(exclude)
+}
+
+// DynamicPhysicalIPStr 供外部查询当前动态检测到的物理网卡 IP（用于 GUI 显示）。
+func DynamicPhysicalIPStr(excludeAdapters []string) string {
+	if ip := dynamicPhysicalIP(excludeAdapters); ip != nil {
+		return ip.String()
+	}
+	return ""
+}
+
+// dynamicPhysicalIP 枚举网卡，排除回环、VPN/虚拟适配器，返回第一个可用的物理 IPv4。
+func dynamicPhysicalIP(excludeKeywords []string) net.IP {
+	exclude := make([]string, 0, len(excludeKeywords)+4)
+	for _, kw := range excludeKeywords {
+		if kw = strings.ToLower(strings.TrimSpace(kw)); kw != "" {
+			exclude = append(exclude, kw)
+		}
+	}
+	for _, kw := range []string{"wsl", "vethernet", "bluetooth", "loopback"} {
+		exclude = append(exclude, kw)
+	}
+	ifaces, err := net.Interfaces()
+	if err != nil {
 		return nil
 	}
-	return append(net.IP(nil), s.directBindIP...)
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		name := strings.ToLower(iface.Name)
+		skip := false
+		for _, kw := range exclude {
+			if strings.Contains(name, kw) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		addrs, _ := iface.Addrs()
+		for _, addr := range addrs {
+			ip, _, err := net.ParseCIDR(addr.String())
+			if err == nil && ip.To4() != nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
+				return ip
+			}
+		}
+	}
+	return nil
 }
 
 func copyAndReport(errc chan<- error, dst io.Writer, src io.Reader) {

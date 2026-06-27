@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -86,7 +87,11 @@ func (c *Controller) Start(ctx context.Context) error {
 		c.mu.Unlock()
 		return nil
 	}
-	c.proxy = proxy.New(c.cfg.Proxy.Listen, c.cfg.Proxy.DirectBindIP, c.cfg.Proxy.ForeignProxy, c)
+	excludeAdapters := append(
+		append([]string(nil), c.cfg.VPN.Tyty.AdapterKeywords...),
+		c.cfg.VPN.GlobalProtect.AdapterKeywords...,
+	)
+	c.proxy = proxy.New(c.cfg.Proxy.Listen, c.cfg.Proxy.DirectBindIP, c.cfg.Proxy.ForeignProxy, c, excludeAdapters)
 	c.started = true
 	c.mu.Unlock()
 
@@ -245,6 +250,18 @@ func (c *Controller) StatusSnapshot() Status {
 		LastError:     c.lastError,
 		Logs:          c.logs.Entries(),
 	}
+}
+
+func (c *Controller) CompanyAdapterIP() net.IP {
+	return c.manager.GlobalProtectAdapterIP()
+}
+
+func (c *Controller) PhysicalAdapterIP() string {
+	excludeAdapters := append(
+		append([]string(nil), c.cfg.VPN.Tyty.AdapterKeywords...),
+		c.cfg.VPN.GlobalProtect.AdapterKeywords...,
+	)
+	return proxy.DynamicPhysicalIPStr(excludeAdapters)
 }
 
 func (c *Controller) DirectBindIP() string {

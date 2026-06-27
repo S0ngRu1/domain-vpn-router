@@ -5,7 +5,6 @@ package gui
 import (
 	"context"
 	"fmt"
-	"net"
 	"runtime"
 	"strings"
 	"sync"
@@ -247,6 +246,9 @@ func Run(ctx context.Context, controller *app.Controller, showWindow bool) error
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
+	// 在 HiDPI 屏幕上使字体和图形清晰渲染，避免 Windows 位图缩放模糊
+	user32.NewProc("SetProcessDPIAware").Call()
+
 	if err := controller.Start(ctx); err != nil {
 		return err
 	}
@@ -298,7 +300,7 @@ func Run(ctx context.Context, controller *app.Controller, showWindow bool) error
 		uintptr(unsafe.Pointer(title)),
 		style,
 		uintptr(cwUseDefault), uintptr(cwUseDefault),
-		860, 620,
+		880, 640,
 		0, 0, instance, 0,
 	)
 	if r.hwnd == 0 {
@@ -513,6 +515,7 @@ func (r *runner) handleCommand(command int) {
 	}
 }
 
+// paintTrayMenu 绘制深色科技风托盘菜单
 func (r *runner) paintTrayMenu(hwnd uintptr) {
 	var ps paintStruct
 	hdc, _, _ := procBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
@@ -522,35 +525,42 @@ func (r *runner) paintTrayMenu(hwnd uintptr) {
 	status := r.currentStatus()
 	r.menuHits = nil
 
-	fillRect(hdc, rc, rgb(224, 231, 239))
+	fillRect(hdc, rc, rgb(8, 12, 22))
 	procSetBkMode.Call(hdc, transparent)
-	panel := rect{Left: rc.Left + 5, Top: rc.Top + 5, Right: rc.Right - 5, Bottom: rc.Bottom - 5}
-	drawRoundedFill(hdc, panel, rgb(255, 255, 255), rgb(148, 163, 184), 12)
-	drawText(hdc, "Domain VPN Router", rect{Left: panel.Left + 14, Top: panel.Top + 12, Right: panel.Right - 14, Bottom: panel.Top + 34}, 13, fwBold, rgb(15, 23, 42), dtLeft|dtSingleLine|dtNoPrefix)
+
+	panel := rect{Left: rc.Left + 4, Top: rc.Top + 4, Right: rc.Right - 4, Bottom: rc.Bottom - 4}
+	drawRoundedFill(hdc, panel, rgb(12, 18, 34), rgb(24, 38, 72), 10)
+
+	drawText(hdc, "Domain VPN Router", rect{Left: panel.Left + 14, Top: panel.Top + 12, Right: panel.Right - 14, Bottom: panel.Top + 34}, 12, fwBold, rgb(200, 218, 255), dtLeft|dtSingleLine|dtNoPrefix)
 	drawText(hdc, modeTitle(status.Mode), rect{Left: panel.Left + 14, Top: panel.Top + 34, Right: panel.Right - 14, Bottom: panel.Top + 52}, 10, fwSemiBold, modeColor(status.Mode), dtLeft|dtSingleLine|dtNoPrefix)
 
-	top := panel.Top + 62
+	fillRect(hdc, rect{Left: panel.Left + 12, Top: panel.Top + 58, Right: panel.Right - 12, Bottom: panel.Top + 59}, rgb(24, 38, 72))
+
+	top := panel.Top + 66
 	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top, Right: panel.Right - 8, Bottom: top + 28}, "自动分流", "AUTO", status.Mode == app.ModeAuto, cmdAuto)
 	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top + 31, Right: panel.Right - 8, Bottom: top + 59}, "强制 Tyty", "TY", status.Mode == app.ModeTyty, cmdTyty)
 	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top + 62, Right: panel.Right - 8, Bottom: top + 90}, "强制 GlobalProtect", "GP", status.Mode == app.ModeGlobalProtect, cmdGlobalProtect)
 	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top + 93, Right: panel.Right - 8, Bottom: top + 121}, "本地直连", "DIR", status.Mode == app.ModeDirect, cmdDirect)
 
-	fillRect(hdc, rect{Left: panel.Left + 12, Top: top + 132, Right: panel.Right - 12, Bottom: top + 133}, rgb(226, 232, 240))
+	fillRect(hdc, rect{Left: panel.Left + 12, Top: top + 132, Right: panel.Right - 12, Bottom: top + 133}, rgb(24, 38, 72))
 	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top + 142, Right: panel.Right - 8, Bottom: top + 170}, "打开主窗口", "OPEN", false, cmdShow)
 	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top + 173, Right: panel.Right - 8, Bottom: top + 201}, "恢复系统代理", "FIX", false, cmdRestoreProxy)
 	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top + 204, Right: panel.Right - 8, Bottom: top + 232}, "退出", "EXIT", false, cmdExit)
 }
 
 func (r *runner) drawTrayMenuItem(hdc uintptr, rc rect, label, tag string, active bool, command int) {
-	bg := rgb(255, 255, 255)
-	fg := rgb(15, 23, 42)
-	tagColor := rgb(100, 116, 139)
+	bg := rgb(12, 18, 34)
+	fg := rgb(140, 168, 218)
+	tagColor := rgb(45, 68, 115)
 	if active {
-		bg = rgb(236, 253, 245)
-		fg = rgb(4, 120, 87)
-		tagColor = rgb(5, 150, 105)
+		bg = rgb(0, 36, 54)
+		fg = rgb(0, 200, 248)
+		tagColor = rgb(0, 160, 205)
 	}
 	drawRoundedFill(hdc, rc, bg, bg, 6)
+	if active {
+		fillRounded(hdc, rect{Left: rc.Left, Top: rc.Top + 4, Right: rc.Left + 3, Bottom: rc.Bottom - 4}, rgb(0, 200, 248), 2)
+	}
 	drawText(hdc, tag, rect{Left: rc.Left + 10, Top: rc.Top + 7, Right: rc.Left + 52, Bottom: rc.Bottom - 5}, 9, fwBold, tagColor, dtLeft|dtSingleLine|dtNoPrefix)
 	drawText(hdc, label, rect{Left: rc.Left + 58, Top: rc.Top + 5, Right: rc.Right - 10, Bottom: rc.Bottom - 5}, 12, fwSemiBold, fg, dtLeft|dtVCenter|dtSingleLine|dtEndEllipsis|dtNoPrefix)
 	r.menuHits = append(r.menuHits, hitTarget{Rect: rc, Action: command})
@@ -599,11 +609,11 @@ func (r *runner) handleClick(p point) {
 		case hitModeDirect:
 			r.applyModeAsync(app.ModeDirect)
 		case hitUseCurrentIP:
-			if ip := firstPhysicalIPv4(); ip != "" {
+			if ip := r.controller.PhysicalAdapterIP(); ip != "" {
 				r.settingsBindIP = ip
-				r.notice = "已填入当前本机 IPv4，点击保存后生效"
+				r.notice = "已填入当前物理网卡 IPv4，点击保存后生效"
 			} else {
-				r.notice = "没有找到可用的本机 IPv4"
+				r.notice = "没有找到可用的物理网卡 IPv4"
 			}
 		case hitClearDirectIP:
 			r.settingsBindIP = ""
@@ -711,26 +721,44 @@ func (r *runner) paint() {
 	status := r.currentStatus()
 	r.hits = nil
 
-	fillRect(hdc, rc, rgb(245, 247, 251))
+	// 深色主背景
+	fillRect(hdc, rc, rgb(10, 14, 26))
 	procSetBkMode.Call(hdc, transparent)
 
-	sidebar := rect{Left: rc.Left, Top: rc.Top, Right: rc.Left + 196, Bottom: rc.Bottom}
-	fillRect(hdc, sidebar, rgb(255, 255, 255))
-	fillRect(hdc, rect{Left: sidebar.Right - 1, Top: sidebar.Top, Right: sidebar.Right, Bottom: sidebar.Bottom}, rgb(226, 232, 240))
-	drawCircleBadge(hdc, sidebar.Left+24, sidebar.Top+28, 42, "D", rgb(16, 185, 129), rgb(255, 255, 255), 18)
-	drawText(hdc, "Domain VPN", rect{Left: sidebar.Left + 78, Top: sidebar.Top + 28, Right: sidebar.Right - 18, Bottom: sidebar.Top + 54}, 17, fwBold, rgb(15, 23, 42), dtLeft|dtSingleLine|dtNoPrefix)
-	drawText(hdc, "Router", rect{Left: sidebar.Left + 78, Top: sidebar.Top + 54, Right: sidebar.Right - 18, Bottom: sidebar.Top + 76}, 13, fwSemiBold, rgb(100, 116, 139), dtLeft|dtSingleLine|dtNoPrefix)
-	r.drawNavItem(hdc, rect{Left: sidebar.Left + 16, Top: sidebar.Top + 118, Right: sidebar.Right - 16, Bottom: sidebar.Top + 160}, "", "状态", r.view == viewStatus, hitTabStatus)
-	r.drawNavItem(hdc, rect{Left: sidebar.Left + 16, Top: sidebar.Top + 168, Right: sidebar.Right - 16, Bottom: sidebar.Top + 210}, "", "日志", r.view == viewLogs, hitTabLogs)
-	r.drawNavItem(hdc, rect{Left: sidebar.Left + 16, Top: sidebar.Top + 218, Right: sidebar.Right - 16, Bottom: sidebar.Top + 260}, "", "设置", r.view == viewSettings, hitTabSettings)
-	drawText(hdc, "系统代理", rect{Left: sidebar.Left + 20, Top: sidebar.Bottom - 92, Right: sidebar.Right - 20, Bottom: sidebar.Bottom - 68}, 12, fwSemiBold, rgb(100, 116, 139), dtLeft|dtSingleLine|dtNoPrefix)
-	drawText(hdc, boolText(status.SystemProxyOn), rect{Left: sidebar.Left + 20, Top: sidebar.Bottom - 62, Right: sidebar.Right - 20, Bottom: sidebar.Bottom - 34}, 18, fwBold, statusColor(status.SystemProxyOn), dtLeft|dtSingleLine|dtNoPrefix)
+	// 侧边栏
+	sidebar := rect{Left: rc.Left, Top: rc.Top, Right: rc.Left + 200, Bottom: rc.Bottom}
+	fillRect(hdc, sidebar, rgb(12, 18, 34))
+	fillRect(hdc, rect{Left: sidebar.Right - 1, Top: sidebar.Top, Right: sidebar.Right, Bottom: sidebar.Bottom}, rgb(24, 38, 72))
 
+	// Logo 区
+	drawCircleBadge(hdc, sidebar.Left+20, sidebar.Top+24, 44, "D", rgb(0, 55, 78), rgb(0, 200, 248), 18)
+	drawText(hdc, "Domain VPN", rect{Left: sidebar.Left + 76, Top: sidebar.Top + 24, Right: sidebar.Right - 8, Bottom: sidebar.Top + 48}, 15, fwBold, rgb(200, 218, 255), dtLeft|dtSingleLine|dtNoPrefix)
+	drawText(hdc, "Router", rect{Left: sidebar.Left + 76, Top: sidebar.Top + 48, Right: sidebar.Right - 8, Bottom: sidebar.Top + 68}, 12, fwSemiBold, rgb(55, 80, 125), dtLeft|dtSingleLine|dtNoPrefix)
+
+	// Logo 下分割线
+	fillRect(hdc, rect{Left: sidebar.Left + 16, Top: sidebar.Top + 86, Right: sidebar.Right - 16, Bottom: sidebar.Top + 87}, rgb(20, 30, 56))
+
+	// 导航项
+	r.drawNavItem(hdc, rect{Left: sidebar.Left + 12, Top: sidebar.Top + 102, Right: sidebar.Right - 12, Bottom: sidebar.Top + 142}, "状态", r.view == viewStatus, hitTabStatus)
+	r.drawNavItem(hdc, rect{Left: sidebar.Left + 12, Top: sidebar.Top + 148, Right: sidebar.Right - 12, Bottom: sidebar.Top + 188}, "日志", r.view == viewLogs, hitTabLogs)
+	r.drawNavItem(hdc, rect{Left: sidebar.Left + 12, Top: sidebar.Top + 194, Right: sidebar.Right - 12, Bottom: sidebar.Top + 234}, "设置", r.view == viewSettings, hitTabSettings)
+
+	// 侧边栏底部分割线
+	fillRect(hdc, rect{Left: sidebar.Left + 16, Top: sidebar.Bottom - 116, Right: sidebar.Right - 16, Bottom: sidebar.Bottom - 115}, rgb(20, 30, 56))
+	drawText(hdc, "系统代理", rect{Left: sidebar.Left + 18, Top: sidebar.Bottom - 106, Right: sidebar.Right - 18, Bottom: sidebar.Bottom - 82}, 10, fwSemiBold, rgb(50, 72, 118), dtLeft|dtSingleLine|dtNoPrefix)
+	drawText(hdc, boolText(status.SystemProxyOn), rect{Left: sidebar.Left + 18, Top: sidebar.Bottom - 78, Right: sidebar.Right - 18, Bottom: sidebar.Bottom - 46}, 16, fwBold, statusColor(status.SystemProxyOn), dtLeft|dtSingleLine|dtNoPrefix)
+	drawText(hdc, "DVR v1.0", rect{Left: sidebar.Left + 18, Top: sidebar.Bottom - 40, Right: sidebar.Right - 18, Bottom: sidebar.Bottom - 16}, 9, fwNormal, rgb(28, 42, 78), dtLeft|dtSingleLine|dtNoPrefix)
+
+	// 主内容区
 	main := rect{Left: sidebar.Right, Top: rc.Top, Right: rc.Right, Bottom: rc.Bottom}
-	header := rect{Left: main.Left, Top: main.Top, Right: main.Right, Bottom: main.Top + 98}
-	fillRect(hdc, header, rgb(255, 255, 255))
+
+	// 顶部 header 条
+	header := rect{Left: main.Left, Top: main.Top, Right: main.Right, Bottom: main.Top + 86}
+	fillRect(hdc, header, rgb(12, 18, 34))
+	fillRect(hdc, rect{Left: header.Left, Top: header.Bottom - 1, Right: header.Right, Bottom: header.Bottom}, rgb(20, 30, 56))
+
 	title := "状态总览"
-	subtitle := "点击模式按钮即可切换网络策略"
+	subtitle := "实时监控路由状态，点击模式按钮即可切换"
 	if r.view == viewLogs {
 		title = "实时日志"
 		subtitle = "查看最近访问、路由动作和错误信息"
@@ -738,11 +766,11 @@ func (r *runner) paint() {
 		title = "设置"
 		subtitle = "调整直连绑定 IP，保存后立即生效"
 	}
-	drawText(hdc, title, rect{Left: main.Left + 28, Top: main.Top + 24, Right: main.Right - 210, Bottom: main.Top + 56}, 24, fwBold, rgb(15, 23, 42), dtLeft|dtSingleLine|dtNoPrefix)
-	drawText(hdc, subtitle, rect{Left: main.Left + 30, Top: main.Top + 60, Right: main.Right - 210, Bottom: main.Top + 82}, 13, fwNormal, rgb(100, 116, 139), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
-	drawPill(hdc, rect{Left: main.Right - 182, Top: main.Top + 30, Right: main.Right - 28, Bottom: main.Top + 66}, modeTitle(status.Mode), modeColor(status.Mode))
+	drawText(hdc, title, rect{Left: main.Left + 26, Top: main.Top + 18, Right: main.Right - 216, Bottom: main.Top + 50}, 20, fwBold, rgb(200, 218, 255), dtLeft|dtSingleLine|dtNoPrefix)
+	drawText(hdc, subtitle, rect{Left: main.Left + 28, Top: main.Top + 54, Right: main.Right - 216, Bottom: main.Top + 76}, 11, fwNormal, rgb(50, 72, 118), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
+	drawPill(hdc, rect{Left: main.Right - 200, Top: main.Top + 20, Right: main.Right - 26, Bottom: main.Top + 60}, modeTitle(status.Mode), modeColor(status.Mode))
 
-	content := rect{Left: main.Left + 28, Top: main.Top + 122, Right: main.Right - 28, Bottom: main.Bottom - 24}
+	content := rect{Left: main.Left + 22, Top: main.Top + 102, Right: main.Right - 22, Bottom: main.Bottom - 18}
 	if r.view == viewSettings {
 		r.drawSettingsPage(hdc, content, status)
 	} else if r.view == viewLogs {
@@ -753,63 +781,69 @@ func (r *runner) paint() {
 }
 
 func (r *runner) drawStatusPage(hdc uintptr, rc rect, status app.Status) {
-	gap := int32(14)
+	gap := int32(12)
 	cardWidth := (rc.Right - rc.Left - gap*2) / 3
-	drawMetricCard(hdc, rect{Left: rc.Left, Top: rc.Top, Right: rc.Left + cardWidth, Bottom: rc.Top + 96}, "代理监听", status.ProxyListen, "NET", status.ProxyRunning)
-	drawMetricCard(hdc, rect{Left: rc.Left + cardWidth + gap, Top: rc.Top, Right: rc.Left + cardWidth*2 + gap, Bottom: rc.Top + 96}, "直连绑定", emptyText(status.DirectBindIP, "自动"), "IP", status.DirectBindIP != "")
-	drawMetricCard(hdc, rect{Left: rc.Left + cardWidth*2 + gap*2, Top: rc.Top, Right: rc.Right, Bottom: rc.Top + 96}, "系统代理", boolText(status.SystemProxyOn), "SYS", status.SystemProxyOn)
 
-	modeTop := rc.Top + 118
+	drawMetricCard(hdc, rect{Left: rc.Left, Top: rc.Top, Right: rc.Left + cardWidth, Bottom: rc.Top + 88}, "代理监听", status.ProxyListen, "NET", status.ProxyRunning)
+	drawMetricCard(hdc, rect{Left: rc.Left + cardWidth + gap, Top: rc.Top, Right: rc.Left + cardWidth*2 + gap, Bottom: rc.Top + 88}, "直连绑定", emptyText(status.DirectBindIP, "自动"), "IP", status.DirectBindIP != "")
+	drawMetricCard(hdc, rect{Left: rc.Left + cardWidth*2 + gap*2, Top: rc.Top, Right: rc.Right, Bottom: rc.Top + 88}, "系统代理", boolText(status.SystemProxyOn), "SYS", status.SystemProxyOn)
+
+	modeTop := rc.Top + 106
 	buttonWidth := (rc.Right - rc.Left - gap*3) / 4
-	r.drawModeButton(hdc, rect{Left: rc.Left, Top: modeTop, Right: rc.Left + buttonWidth, Bottom: modeTop + 86}, "AUTO", "自动分流", "按域名规则选择", status.Mode == app.ModeAuto, hitModeAuto)
-	r.drawModeButton(hdc, rect{Left: rc.Left + (buttonWidth+gap)*1, Top: modeTop, Right: rc.Left + (buttonWidth+gap)*1 + buttonWidth, Bottom: modeTop + 86}, "TY", "强制 Tyty", "全部公网走 Tyty", status.Mode == app.ModeTyty, hitModeTyty)
-	r.drawModeButton(hdc, rect{Left: rc.Left + (buttonWidth+gap)*2, Top: modeTop, Right: rc.Left + (buttonWidth+gap)*2 + buttonWidth, Bottom: modeTop + 86}, "GP", "强制 GP", "全部公网走公司 VPN", status.Mode == app.ModeGlobalProtect, hitModeGlobalProtect)
-	r.drawModeButton(hdc, rect{Left: rc.Left + (buttonWidth+gap)*3, Top: modeTop, Right: rc.Right, Bottom: modeTop + 86}, "DIR", "本地直连", "关闭系统代理", status.Mode == app.ModeDirect, hitModeDirect)
+	r.drawModeButton(hdc, rect{Left: rc.Left, Top: modeTop, Right: rc.Left + buttonWidth, Bottom: modeTop + 88}, "AUTO", "自动分流", "按域名规则选择", status.Mode == app.ModeAuto, hitModeAuto)
+	r.drawModeButton(hdc, rect{Left: rc.Left + (buttonWidth+gap)*1, Top: modeTop, Right: rc.Left + (buttonWidth+gap)*1 + buttonWidth, Bottom: modeTop + 88}, "TY", "强制 Tyty", "全部公网走 Tyty", status.Mode == app.ModeTyty, hitModeTyty)
+	r.drawModeButton(hdc, rect{Left: rc.Left + (buttonWidth+gap)*2, Top: modeTop, Right: rc.Left + (buttonWidth+gap)*2 + buttonWidth, Bottom: modeTop + 88}, "GP", "强制 GP", "全部公网走公司 VPN", status.Mode == app.ModeGlobalProtect, hitModeGlobalProtect)
+	r.drawModeButton(hdc, rect{Left: rc.Left + (buttonWidth+gap)*3, Top: modeTop, Right: rc.Right, Bottom: modeTop + 88}, "DIR", "本地直连", "关闭系统代理", status.Mode == app.ModeDirect, hitModeDirect)
 
-	vpnTop := modeTop + 106
+	vpnTop := modeTop + 104
 	vpnWidth := (rc.Right - rc.Left - gap) / 2
-	drawVPNCard(hdc, rect{Left: rc.Left, Top: vpnTop, Right: rc.Left + vpnWidth, Bottom: vpnTop + 82}, "Tyty", status.TytyUp, "TY")
-	drawVPNCard(hdc, rect{Left: rc.Left + vpnWidth + gap, Top: vpnTop, Right: rc.Right, Bottom: vpnTop + 82}, "GlobalProtect", status.GlobalUp, "GP")
+	drawVPNCard(hdc, rect{Left: rc.Left, Top: vpnTop, Right: rc.Left + vpnWidth, Bottom: vpnTop + 78}, "Tyty", status.TytyUp, "TY")
+	drawVPNCard(hdc, rect{Left: rc.Left + vpnWidth + gap, Top: vpnTop, Right: rc.Right, Bottom: vpnTop + 78}, "GlobalProtect", status.GlobalUp, "GP")
 
 	if status.LastError != "" {
-		drawAlert(hdc, rect{Left: rc.Left, Top: vpnTop + 102, Right: rc.Right, Bottom: vpnTop + 154}, status.LastError)
+		drawAlert(hdc, rect{Left: rc.Left, Top: vpnTop + 94, Right: rc.Right, Bottom: vpnTop + 140}, status.LastError)
 	}
 }
 
 func (r *runner) drawLogsPage(hdc uintptr, rc rect, status app.Status) {
 	logTop := rc.Top
 	if status.LastError != "" {
-		drawAlert(hdc, rect{Left: rc.Left, Top: logTop, Right: rc.Right, Bottom: logTop + 52}, status.LastError)
-		logTop += 66
+		drawAlert(hdc, rect{Left: rc.Left, Top: logTop, Right: rc.Right, Bottom: logTop + 50}, status.LastError)
+		logTop += 64
 	}
 	drawLogPanel(hdc, rect{Left: rc.Left, Top: logTop, Right: rc.Right, Bottom: rc.Bottom}, status.Logs)
 }
 
 func (r *runner) drawSettingsPage(hdc uintptr, rc rect, status app.Status) {
-	drawCard(hdc, rect{Left: rc.Left, Top: rc.Top, Right: rc.Right, Bottom: rc.Top + 172})
-	drawText(hdc, "直连绑定 IP", rect{Left: rc.Left + 22, Top: rc.Top + 20, Right: rc.Right - 22, Bottom: rc.Top + 48}, 18, fwBold, rgb(15, 23, 42), dtLeft|dtSingleLine|dtNoPrefix)
-	drawText(hdc, "用于 direct 流量指定本地网卡。留空会使用系统默认路由。", rect{Left: rc.Left + 22, Top: rc.Top + 52, Right: rc.Right - 22, Bottom: rc.Top + 76}, 13, fwNormal, rgb(100, 116, 139), dtLeft|dtSingleLine|dtNoPrefix)
-	field := rect{Left: rc.Left + 22, Top: rc.Top + 90, Right: rc.Right - 22, Bottom: rc.Top + 132}
-	drawRoundedFill(hdc, field, rgb(248, 250, 252), rgb(203, 213, 225), 12)
-	drawText(hdc, emptyText(r.settingsBindIP, "自动选择系统默认路由"), rect{Left: field.Left + 14, Top: field.Top + 10, Right: field.Right - 14, Bottom: field.Bottom - 8}, 16, fwSemiBold, rgb(15, 23, 42), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
+	// 直连绑定 IP 卡片
+	cardBottom := rc.Top + 164
+	drawCard(hdc, rect{Left: rc.Left, Top: rc.Top, Right: rc.Right, Bottom: cardBottom})
+	drawText(hdc, "直连绑定 IP", rect{Left: rc.Left + 20, Top: rc.Top + 16, Right: rc.Right - 20, Bottom: rc.Top + 44}, 16, fwBold, rgb(200, 218, 255), dtLeft|dtSingleLine|dtNoPrefix)
+	drawText(hdc, "用于 direct 流量指定本地网卡。留空会使用系统默认路由。", rect{Left: rc.Left + 20, Top: rc.Top + 48, Right: rc.Right - 20, Bottom: rc.Top + 70}, 11, fwNormal, rgb(50, 72, 118), dtLeft|dtSingleLine|dtNoPrefix)
 
-	buttonTop := rc.Top + 196
-	buttonW := int32(188)
-	r.drawActionButton(hdc, rect{Left: rc.Left, Top: buttonTop, Right: rc.Left + buttonW, Bottom: buttonTop + 48}, "使用当前 WLAN IP", rgb(37, 99, 235), hitUseCurrentIP)
-	r.drawActionButton(hdc, rect{Left: rc.Left + buttonW + 14, Top: buttonTop, Right: rc.Left + buttonW*2 + 14, Bottom: buttonTop + 48}, "清空绑定", rgb(100, 116, 139), hitClearDirectIP)
-	r.drawActionButton(hdc, rect{Left: rc.Left + (buttonW+14)*2, Top: buttonTop, Right: rc.Left + buttonW*3 + 28, Bottom: buttonTop + 48}, "保存设置", rgb(5, 150, 105), hitSaveSettings)
+	field := rect{Left: rc.Left + 20, Top: rc.Top + 82, Right: rc.Right - 20, Bottom: rc.Top + 122}
+	drawRoundedFill(hdc, field, rgb(8, 12, 22), rgb(22, 34, 65), 10)
+	drawText(hdc, emptyText(r.settingsBindIP, "自动选择系统默认路由"), rect{Left: field.Left + 14, Top: field.Top + 10, Right: field.Right - 14, Bottom: field.Bottom - 8}, 14, fwSemiBold, rgb(140, 168, 218), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
 
-	drawCard(hdc, rect{Left: rc.Left, Top: buttonTop + 78, Right: rc.Right, Bottom: buttonTop + 190})
-	drawText(hdc, "维护操作", rect{Left: rc.Left + 22, Top: buttonTop + 98, Right: rc.Right - 22, Bottom: buttonTop + 126}, 18, fwBold, rgb(15, 23, 42), dtLeft|dtSingleLine|dtNoPrefix)
-	r.drawSecondaryButton(hdc, rect{Left: rc.Left + 22, Top: buttonTop + 138, Right: rc.Left + 194, Bottom: buttonTop + 174}, "恢复系统代理", hitRestoreProxy)
-	r.drawSecondaryButton(hdc, rect{Left: rc.Left + 208, Top: buttonTop + 138, Right: rc.Left + 380, Bottom: buttonTop + 174}, "打开配置文件", hitOpenConfig)
+	buttonTop := cardBottom + 16
+	buttonW := int32(176)
+	r.drawActionButton(hdc, rect{Left: rc.Left, Top: buttonTop, Right: rc.Left + buttonW, Bottom: buttonTop + 42}, "使用当前 WLAN IP", rgb(0, 85, 155), hitUseCurrentIP)
+	r.drawActionButton(hdc, rect{Left: rc.Left + buttonW + 12, Top: buttonTop, Right: rc.Left + buttonW*2 + 12, Bottom: buttonTop + 42}, "清空绑定", rgb(28, 38, 72), hitClearDirectIP)
+	r.drawActionButton(hdc, rect{Left: rc.Left + (buttonW+12)*2, Top: buttonTop, Right: rc.Left + (buttonW+12)*2 + buttonW, Bottom: buttonTop + 42}, "保存设置", rgb(0, 115, 78), hitSaveSettings)
 
-	infoTop := buttonTop + 220
-	drawText(hdc, "当前配置", rect{Left: rc.Left, Top: infoTop, Right: rc.Right, Bottom: infoTop + 26}, 16, fwBold, rgb(15, 23, 42), dtLeft|dtSingleLine|dtNoPrefix)
-	drawText(hdc, "代理监听: "+status.ProxyListen, rect{Left: rc.Left, Top: infoTop + 34, Right: rc.Right, Bottom: infoTop + 58}, 13, fwNormal, rgb(71, 85, 105), dtLeft|dtSingleLine|dtNoPrefix)
-	drawText(hdc, "已保存直连绑定: "+emptyText(status.DirectBindIP, "自动"), rect{Left: rc.Left, Top: infoTop + 62, Right: rc.Right, Bottom: infoTop + 86}, 13, fwNormal, rgb(71, 85, 105), dtLeft|dtSingleLine|dtNoPrefix)
+	maintTop := buttonTop + 60
+	drawCard(hdc, rect{Left: rc.Left, Top: maintTop, Right: rc.Right, Bottom: maintTop + 108})
+	drawText(hdc, "维护操作", rect{Left: rc.Left + 20, Top: maintTop + 16, Right: rc.Right - 20, Bottom: maintTop + 42}, 15, fwBold, rgb(200, 218, 255), dtLeft|dtSingleLine|dtNoPrefix)
+	r.drawSecondaryButton(hdc, rect{Left: rc.Left + 20, Top: maintTop + 54, Right: rc.Left + 196, Bottom: maintTop + 90}, "恢复系统代理", hitRestoreProxy)
+	r.drawSecondaryButton(hdc, rect{Left: rc.Left + 210, Top: maintTop + 54, Right: rc.Left + 386, Bottom: maintTop + 90}, "打开配置文件", hitOpenConfig)
+
+	infoTop := maintTop + 126
+	drawText(hdc, "当前配置", rect{Left: rc.Left, Top: infoTop, Right: rc.Right, Bottom: infoTop + 22}, 13, fwBold, rgb(100, 130, 185), dtLeft|dtSingleLine|dtNoPrefix)
+	drawText(hdc, "代理监听: "+status.ProxyListen, rect{Left: rc.Left, Top: infoTop + 28, Right: rc.Right, Bottom: infoTop + 50}, 11, fwNormal, rgb(42, 62, 105), dtLeft|dtSingleLine|dtNoPrefix)
+	drawText(hdc, "已保存直连绑定: "+emptyText(status.DirectBindIP, "自动"), rect{Left: rc.Left, Top: infoTop + 54, Right: rc.Right, Bottom: infoTop + 76}, 11, fwNormal, rgb(42, 62, 105), dtLeft|dtSingleLine|dtNoPrefix)
+
 	if r.notice != "" {
-		drawText(hdc, r.notice, rect{Left: rc.Left, Top: rc.Bottom - 30, Right: rc.Right, Bottom: rc.Bottom}, 13, fwSemiBold, rgb(5, 150, 105), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
+		drawText(hdc, r.notice, rect{Left: rc.Left, Top: rc.Bottom - 26, Right: rc.Right, Bottom: rc.Bottom}, 11, fwSemiBold, rgb(0, 195, 120), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
 	}
 }
 
@@ -838,77 +872,95 @@ func (r *runner) addHit(rc rect, action int) {
 	r.hits = append(r.hits, hitTarget{Rect: rc, Action: action})
 }
 
-func (r *runner) drawNavItem(hdc uintptr, rc rect, icon, label string, active bool, action int) {
-	bg := rgb(255, 255, 255)
-	fg := rgb(71, 85, 105)
+func (r *runner) drawNavItem(hdc uintptr, rc rect, label string, active bool, action int) {
 	if active {
-		bg = rgb(236, 253, 245)
-		fg = rgb(4, 120, 87)
+		drawRoundedFill(hdc, rc, rgb(0, 28, 48), rgb(0, 28, 48), 8)
+		fillRounded(hdc, rect{Left: rc.Left, Top: rc.Top + 8, Right: rc.Left + 3, Bottom: rc.Bottom - 8}, rgb(0, 200, 248), 2)
+		drawText(hdc, label, rect{Left: rc.Left + 20, Top: rc.Top, Right: rc.Right - 10, Bottom: rc.Bottom}, 14, fwBold, rgb(0, 200, 248), dtLeft|dtVCenter|dtSingleLine|dtNoPrefix)
+	} else {
+		drawRoundedFill(hdc, rc, rgb(12, 18, 34), rgb(12, 18, 34), 8)
+		drawText(hdc, label, rect{Left: rc.Left + 20, Top: rc.Top, Right: rc.Right - 10, Bottom: rc.Bottom}, 14, fwSemiBold, rgb(55, 80, 125), dtLeft|dtVCenter|dtSingleLine|dtNoPrefix)
 	}
-	drawRoundedFill(hdc, rc, bg, bg, 8)
-	if active {
-		fillRounded(hdc, rect{Left: rc.Left, Top: rc.Top + 8, Right: rc.Left + 4, Bottom: rc.Bottom - 8}, rgb(16, 185, 129), 2)
-	}
-	drawText(hdc, label, rect{Left: rc.Left + 18, Top: rc.Top + 10, Right: rc.Right - 16, Bottom: rc.Bottom - 10}, 15, fwSemiBold, fg, dtLeft|dtVCenter|dtSingleLine|dtNoPrefix)
 	r.addHit(rc, action)
 }
 
-func (r *runner) drawModeButton(hdc uintptr, rc rect, icon, title, subtitle string, active bool, action int) {
-	fill := rgb(255, 255, 255)
-	stroke := rgb(226, 232, 240)
-	titleColor := rgb(15, 23, 42)
+func (r *runner) drawModeButton(hdc uintptr, rc rect, code, title, subtitle string, active bool, action int) {
 	if active {
-		fill = rgb(236, 253, 245)
-		stroke = rgb(16, 185, 129)
-		titleColor = rgb(4, 120, 87)
+		mc := modeColor(modFromCode(code))
+		drawRoundedFill(hdc, rc, rgb(10, 16, 36), mc, 10)
+		drawText(hdc, code, rect{Left: rc.Left + 16, Top: rc.Top + 12, Right: rc.Left + 60, Bottom: rc.Top + 34}, 10, fwBold, mc, dtLeft|dtSingleLine|dtNoPrefix)
+		drawText(hdc, title, rect{Left: rc.Left + 16, Top: rc.Top + 34, Right: rc.Right - 10, Bottom: rc.Top + 58}, 14, fwBold, rgb(200, 218, 255), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
+		drawText(hdc, subtitle, rect{Left: rc.Left + 16, Top: rc.Top + 58, Right: rc.Right - 10, Bottom: rc.Top + 80}, 10, fwNormal, rgb(90, 120, 175), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
+	} else {
+		drawRoundedFill(hdc, rc, rgb(13, 20, 40), rgb(20, 32, 62), 10)
+		drawText(hdc, code, rect{Left: rc.Left + 16, Top: rc.Top + 12, Right: rc.Left + 60, Bottom: rc.Top + 34}, 10, fwBold, rgb(35, 55, 100), dtLeft|dtSingleLine|dtNoPrefix)
+		drawText(hdc, title, rect{Left: rc.Left + 16, Top: rc.Top + 34, Right: rc.Right - 10, Bottom: rc.Top + 58}, 14, fwBold, rgb(100, 128, 185), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
+		drawText(hdc, subtitle, rect{Left: rc.Left + 16, Top: rc.Top + 58, Right: rc.Right - 10, Bottom: rc.Top + 80}, 10, fwNormal, rgb(35, 52, 95), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
 	}
-	drawRoundedFill(hdc, rc, fill, stroke, 8)
-	drawText(hdc, icon, rect{Left: rc.Left + 16, Top: rc.Top + 16, Right: rc.Left + 58, Bottom: rc.Top + 40}, 13, fwBold, titleColor, dtLeft|dtSingleLine|dtNoPrefix)
-	drawText(hdc, title, rect{Left: rc.Left + 16, Top: rc.Top + 40, Right: rc.Right - 14, Bottom: rc.Top + 62}, 15, fwBold, titleColor, dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
-	drawText(hdc, subtitle, rect{Left: rc.Left + 16, Top: rc.Top + 62, Right: rc.Right - 14, Bottom: rc.Top + 80}, 11, fwNormal, rgb(100, 116, 139), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
 	r.addHit(rc, action)
+}
+
+// modFromCode 将模式代码映射到 app.Mode，用于 modeColor 查找
+func modFromCode(code string) app.Mode {
+	switch code {
+	case "TY":
+		return app.ModeTyty
+	case "GP":
+		return app.ModeGlobalProtect
+	case "DIR":
+		return app.ModeDirect
+	default:
+		return app.ModeAuto
+	}
 }
 
 func (r *runner) drawActionButton(hdc uintptr, rc rect, text string, color uintptr, action int) {
 	drawRoundedFill(hdc, rc, color, color, 8)
-	drawText(hdc, text, rc, 14, fwBold, rgb(255, 255, 255), dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
+	drawText(hdc, text, rc, 12, fwBold, rgb(200, 218, 255), dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
 	r.addHit(rc, action)
 }
 
 func (r *runner) drawSecondaryButton(hdc uintptr, rc rect, text string, action int) {
-	drawRoundedFill(hdc, rc, rgb(248, 250, 252), rgb(203, 213, 225), 8)
-	drawText(hdc, text, rc, 13, fwSemiBold, rgb(15, 23, 42), dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
+	drawRoundedFill(hdc, rc, rgb(13, 20, 40), rgb(22, 34, 65), 8)
+	drawText(hdc, text, rc, 12, fwSemiBold, rgb(90, 120, 175), dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
 	r.addHit(rc, action)
 }
 
 func drawMetricCard(hdc uintptr, rc rect, title, value, icon string, ok bool) {
 	drawCard(hdc, rc)
-	drawText(hdc, icon, rect{Left: rc.Left + 18, Top: rc.Top + 18, Right: rc.Left + 62, Bottom: rc.Top + 40}, 12, fwBold, rgb(16, 185, 129), dtLeft|dtSingleLine|dtNoPrefix)
-	drawMiniStatus(hdc, rect{Left: rc.Right - 78, Top: rc.Top + 16, Right: rc.Right - 16, Bottom: rc.Top + 38}, ok)
-	drawText(hdc, title, rect{Left: rc.Left + 18, Top: rc.Top + 42, Right: rc.Right - 18, Bottom: rc.Top + 64}, 13, fwSemiBold, rgb(100, 116, 139), dtLeft|dtSingleLine|dtNoPrefix)
-	drawText(hdc, value, rect{Left: rc.Left + 18, Top: rc.Top + 66, Right: rc.Right - 18, Bottom: rc.Top + 90}, 17, fwBold, rgb(15, 23, 42), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
+	drawText(hdc, icon, rect{Left: rc.Left + 16, Top: rc.Top + 12, Right: rc.Left + 56, Bottom: rc.Top + 34}, 10, fwBold, rgb(0, 130, 170), dtLeft|dtSingleLine|dtNoPrefix)
+	drawMiniStatus(hdc, rect{Left: rc.Right - 68, Top: rc.Top + 10, Right: rc.Right - 10, Bottom: rc.Top + 32}, ok)
+	drawText(hdc, title, rect{Left: rc.Left + 16, Top: rc.Top + 36, Right: rc.Right - 16, Bottom: rc.Top + 56}, 10, fwSemiBold, rgb(45, 65, 108), dtLeft|dtSingleLine|dtNoPrefix)
+	drawText(hdc, value, rect{Left: rc.Left + 16, Top: rc.Top + 56, Right: rc.Right - 16, Bottom: rc.Top + 82}, 14, fwBold, rgb(148, 178, 235), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
 }
 
 func drawVPNCard(hdc uintptr, rc rect, name string, up bool, icon string) {
 	drawCard(hdc, rc)
-	drawCircleBadge(hdc, rc.Left+18, rc.Top+18, 44, icon, statusSoftColor(up), statusColor(up), 13)
-	drawText(hdc, name, rect{Left: rc.Left + 82, Top: rc.Top + 20, Right: rc.Right - 20, Bottom: rc.Top + 46}, 18, fwBold, rgb(15, 23, 42), dtLeft|dtSingleLine|dtNoPrefix)
-	drawText(hdc, statusLine(up), rect{Left: rc.Left + 82, Top: rc.Top + 48, Right: rc.Right - 20, Bottom: rc.Top + 72}, 13, fwSemiBold, statusColor(up), dtLeft|dtSingleLine|dtNoPrefix)
+	barColor := rgb(0, 55, 38)
+	if !up {
+		barColor = rgb(48, 14, 14)
+	}
+	fillRounded(hdc, rect{Left: rc.Left + 14, Top: rc.Top + 12, Right: rc.Left + 17, Bottom: rc.Bottom - 12}, barColor, 2)
+	drawCircleBadge(hdc, rc.Left+26, rc.Top+14, 40, icon, statusSoftColor(up), statusColor(up), 12)
+	drawText(hdc, name, rect{Left: rc.Left + 82, Top: rc.Top + 14, Right: rc.Right - 14, Bottom: rc.Top + 40}, 16, fwBold, rgb(148, 178, 235), dtLeft|dtSingleLine|dtNoPrefix)
+	drawText(hdc, statusLine(up), rect{Left: rc.Left + 82, Top: rc.Top + 42, Right: rc.Right - 14, Bottom: rc.Top + 66}, 12, fwSemiBold, statusColor(up), dtLeft|dtSingleLine|dtNoPrefix)
 }
 
 func drawAlert(hdc uintptr, rc rect, message string) {
-	drawRoundedFill(hdc, rc, rgb(254, 242, 242), rgb(254, 202, 202), 12)
-	drawText(hdc, "!", rect{Left: rc.Left + 18, Top: rc.Top + 12, Right: rc.Left + 48, Bottom: rc.Bottom - 10}, 20, fwBold, rgb(220, 38, 38), dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
-	drawText(hdc, "最近错误: "+message, rect{Left: rc.Left + 56, Top: rc.Top + 16, Right: rc.Right - 18, Bottom: rc.Bottom - 12}, 14, fwSemiBold, rgb(153, 27, 27), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
+	drawRoundedFill(hdc, rc, rgb(38, 10, 10), rgb(85, 22, 22), 10)
+	drawText(hdc, "!", rect{Left: rc.Left + 16, Top: rc.Top + 10, Right: rc.Left + 42, Bottom: rc.Bottom - 10}, 18, fwBold, rgb(235, 58, 58), dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
+	drawText(hdc, "错误: "+message, rect{Left: rc.Left + 50, Top: rc.Top + 14, Right: rc.Right - 14, Bottom: rc.Bottom - 10}, 12, fwSemiBold, rgb(210, 90, 90), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
 }
 
 func drawLogPanel(hdc uintptr, rc rect, logs []string) {
 	drawCard(hdc, rc)
-	drawText(hdc, "实时日志", rect{Left: rc.Left + 18, Top: rc.Top + 16, Right: rc.Right - 150, Bottom: rc.Top + 42}, 18, fwBold, rgb(15, 23, 42), dtLeft|dtSingleLine|dtNoPrefix)
-	drawText(hdc, "每秒自动刷新", rect{Left: rc.Right - 150, Top: rc.Top + 18, Right: rc.Right - 18, Bottom: rc.Top + 40}, 12, fwSemiBold, rgb(34, 197, 94), dtRight|dtSingleLine|dtNoPrefix)
+	drawText(hdc, "实时日志", rect{Left: rc.Left + 16, Top: rc.Top + 13, Right: rc.Right - 150, Bottom: rc.Top + 38}, 15, fwBold, rgb(148, 178, 235), dtLeft|dtSingleLine|dtNoPrefix)
+	drawText(hdc, "● 每秒刷新", rect{Left: rc.Right - 148, Top: rc.Top + 15, Right: rc.Right - 14, Bottom: rc.Top + 38}, 10, fwSemiBold, rgb(0, 155, 95), dtRight|dtSingleLine|dtNoPrefix)
+
+	fillRect(hdc, rect{Left: rc.Left + 12, Top: rc.Top + 44, Right: rc.Right - 12, Bottom: rc.Top + 45}, rgb(18, 28, 54))
 
 	list := logs
-	maxLines := int((rc.Bottom - rc.Top - 66) / 24)
+	maxLines := int((rc.Bottom - rc.Top - 58) / 21)
 	if maxLines < 1 {
 		maxLines = 1
 	}
@@ -916,42 +968,41 @@ func drawLogPanel(hdc uintptr, rc rect, logs []string) {
 		list = list[len(list)-maxLines:]
 	}
 	if len(list) == 0 {
-		drawText(hdc, "暂无日志，等待新的访问请求。", rect{Left: rc.Left + 18, Top: rc.Top + 58, Right: rc.Right - 18, Bottom: rc.Top + 86}, 14, fwNormal, rgb(100, 116, 139), dtLeft|dtSingleLine|dtNoPrefix)
+		drawText(hdc, "暂无日志，等待新的访问请求...", rect{Left: rc.Left + 16, Top: rc.Top + 54, Right: rc.Right - 16, Bottom: rc.Top + 80}, 12, fwNormal, rgb(35, 52, 95), dtLeft|dtSingleLine|dtNoPrefix)
 		return
 	}
-	top := rc.Top + 54
+	top := rc.Top + 50
 	for i, line := range list {
-		row := rect{Left: rc.Left + 14, Top: top + int32(i*24), Right: rc.Right - 14, Bottom: top + int32(i*24) + 22}
+		row := rect{Left: rc.Left + 10, Top: top + int32(i*21), Right: rc.Right - 10, Bottom: top + int32(i*21) + 19}
 		if i%2 == 0 {
-			fillRounded(hdc, row, rgb(248, 250, 252), 8)
+			fillRounded(hdc, row, rgb(12, 18, 38), 5)
 		}
-		drawText(hdc, line, rect{Left: row.Left + 10, Top: row.Top + 2, Right: row.Right - 10, Bottom: row.Bottom}, 12, fwNormal, rgb(51, 65, 85), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
+		drawText(hdc, line, rect{Left: row.Left + 10, Top: row.Top + 2, Right: row.Right - 10, Bottom: row.Bottom}, 10, fwNormal, rgb(65, 92, 148), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
 	}
 }
 
 func drawCard(hdc uintptr, rc rect) {
-	drawRoundedFill(hdc, rc, rgb(255, 255, 255), rgb(226, 232, 240), 8)
+	drawRoundedFill(hdc, rc, rgb(13, 20, 40), rgb(20, 32, 62), 10)
 }
 
 func drawPill(hdc uintptr, rc rect, text string, color uintptr) {
-	drawRoundedFill(hdc, rc, color, color, 8)
-	drawText(hdc, text, rc, 13, fwBold, rgb(255, 255, 255), dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
+	// 深色底 + 彩色描边 + 彩色文字，科技感徽章
+	drawRoundedFill(hdc, rc, rgb(10, 14, 26), color, 8)
+	drawText(hdc, text, rc, 12, fwBold, color, dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
 }
 
 func drawStatusDot(hdc uintptr, x, y int32, ok bool) {
-	color := statusColor(ok)
-	fillRounded(hdc, rect{Left: x, Top: y, Right: x + 12, Bottom: y + 12}, color, 6)
+	fillRounded(hdc, rect{Left: x, Top: y, Right: x + 10, Bottom: y + 10}, statusColor(ok), 5)
 }
 
 func drawMiniStatus(hdc uintptr, rc rect, ok bool) {
-	bg := rgb(220, 252, 231)
-	fg := rgb(22, 101, 52)
-	if !ok {
-		bg = rgb(241, 245, 249)
-		fg = rgb(100, 116, 139)
+	if ok {
+		drawRoundedFill(hdc, rc, rgb(0, 38, 26), rgb(0, 38, 26), 5)
+		drawText(hdc, "运行中", rc, 8, fwBold, rgb(0, 195, 115), dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
+	} else {
+		drawRoundedFill(hdc, rc, rgb(18, 24, 48), rgb(18, 24, 48), 5)
+		drawText(hdc, "未启用", rc, 8, fwBold, rgb(45, 65, 108), dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
 	}
-	drawRoundedFill(hdc, rc, bg, bg, 8)
-	drawText(hdc, statusText(ok), rc, 10, fwSemiBold, fg, dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
 }
 
 func drawCircleBadge(hdc uintptr, left, top, size int32, text string, bg, fg uintptr, fontSize int32) {
@@ -1020,16 +1071,16 @@ func statusLine(ok bool) string {
 
 func statusColor(ok bool) uintptr {
 	if ok {
-		return rgb(22, 163, 74)
+		return rgb(0, 200, 118)
 	}
-	return rgb(239, 68, 68)
+	return rgb(220, 55, 55)
 }
 
 func statusSoftColor(ok bool) uintptr {
 	if ok {
-		return rgb(220, 252, 231)
+		return rgb(0, 48, 34)
 	}
-	return rgb(254, 226, 226)
+	return rgb(48, 14, 14)
 }
 
 func boolText(ok bool) string {
@@ -1055,13 +1106,13 @@ func modeTitle(mode app.Mode) string {
 func modeColor(mode app.Mode) uintptr {
 	switch mode {
 	case app.ModeTyty:
-		return rgb(37, 99, 235)
+		return rgb(128, 58, 238)
 	case app.ModeGlobalProtect:
-		return rgb(124, 58, 237)
+		return rgb(28, 108, 238)
 	case app.ModeDirect:
-		return rgb(100, 116, 139)
+		return rgb(68, 88, 138)
 	default:
-		return rgb(5, 150, 105)
+		return rgb(0, 195, 165)
 	}
 }
 
@@ -1084,59 +1135,56 @@ func pointFromLParam(lParam uintptr) point {
 	}
 }
 
-func firstPhysicalIPv4() string {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return ""
-	}
-	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		name := strings.ToLower(iface.Name + " " + iface.HardwareAddr.String())
-		if strings.Contains(name, "mihomo") || strings.Contains(name, "wsl") || strings.Contains(name, "vethernet") {
-			continue
-		}
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, addr := range addrs {
-			ip, _, err := net.ParseCIDR(addr.String())
-			if err != nil || ip.To4() == nil {
-				continue
-			}
-			if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
-				continue
-			}
-			return ip.String()
-		}
-	}
-	return ""
-}
-
+// createAppIcon 生成电路板风格图标：深蓝底 + 青色外环 + 十字走线 + 斜向焊盘 + 中心亮点
 func createAppIcon(instance uintptr) uintptr {
 	const size = 32
 	xor := make([]byte, size*size*4)
 	and := make([]byte, size*size/8)
+	cx, cy := size/2, size/2
 	for y := 0; y < size; y++ {
 		for x := 0; x < size; x++ {
 			i := (y*size + x) * 4
-			dx := x - size/2
-			dy := y - size/2
-			if dx*dx+dy*dy > 15*15 {
-				xor[i+3] = 0
+			dx := x - cx
+			dy := y - cy
+			d2 := dx*dx + dy*dy
+
+			if d2 > 15*15 {
 				continue
 			}
-			xor[i+0] = 153
-			xor[i+1] = 211
-			xor[i+2] = 52
-			xor[i+3] = 255
-			if x > 10 && x < 22 && y > 10 && y < 22 {
-				xor[i+0] = 42
-				xor[i+1] = 39
-				xor[i+2] = 15
+
+			// 深蓝背景
+			b, g, r := byte(36), byte(20), byte(10)
+
+			// 青色外环 r=12..15
+			if d2 >= 12*12 {
+				b, g, r = 248, 200, 0
 			}
+
+			// 十字走线（水平+垂直 ±1px，仅在外环内）
+			inH := dy >= -1 && dy <= 1
+			inV := dx >= -1 && dx <= 1
+			if (inH || inV) && d2 < 12*12 {
+				b, g, r = 175, 145, 0
+			}
+
+			// 斜 45° 焊盘（±6,±6），覆盖走线
+			for _, pad := range [][2]int{{-6, -6}, {6, -6}, {-6, 6}, {6, 6}} {
+				pdx := dx - pad[0]
+				pdy := dy - pad[1]
+				if pdx*pdx+pdy*pdy < 6 {
+					b, g, r = 255, 212, 0
+				}
+			}
+
+			// 中心亮点 r<3
+			if d2 < 3*3 {
+				b, g, r = 255, 245, 215
+			}
+
+			xor[i+0] = b
+			xor[i+1] = g
+			xor[i+2] = r
+			xor[i+3] = 255
 		}
 	}
 	icon, _, _ := procCreateIcon.Call(

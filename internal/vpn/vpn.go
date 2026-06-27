@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"runtime"
 	"strings"
 	"sync"
@@ -46,6 +47,10 @@ func (m *Manager) TytyUp(ctx context.Context) bool {
 func (m *Manager) GlobalProtectUp(ctx context.Context) bool {
 	up, _ := adapterUp(ctx, m.cfg.GlobalProtect.AdapterKeywords)
 	return up
+}
+
+func (m *Manager) GlobalProtectAdapterIP() net.IP {
+	return adapterIPFromInterfaces(m.cfg.GlobalProtect.AdapterKeywords)
 }
 
 func (m *Manager) ensure(ctx context.Context, name string, endpoint config.VPNEndpoint) error {
@@ -126,6 +131,9 @@ func adapterUp(ctx context.Context, keywords []string) (bool, error) {
 	if runtime.GOOS != "windows" {
 		return false, nil
 	}
+	if up := adapterUpFromInterfaces(keywords); up {
+		return true, nil
+	}
 	out, err := hiddenexec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", "Get-NetAdapter | Select-Object Name,InterfaceDescription,Status | ConvertTo-Csv -NoTypeInformation").Output()
 	if err != nil {
 		return false, err
@@ -142,6 +150,53 @@ func adapterUp(ctx context.Context, keywords []string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func adapterIPFromInterfaces(keywords []string) net.IP {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(iface.Name))
+		for _, kw := range keywords {
+			kw = strings.ToLower(strings.TrimSpace(kw))
+			if kw == "" || !strings.Contains(name, kw) {
+				continue
+			}
+			addrs, _ := iface.Addrs()
+			for _, addr := range addrs {
+				ip, _, err := net.ParseCIDR(addr.String())
+				if err == nil && ip.To4() != nil && !ip.IsLoopback() {
+					return ip
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func adapterUpFromInterfaces(keywords []string) bool {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return false
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(iface.Name))
+		for _, kw := range keywords {
+			kw = strings.ToLower(strings.TrimSpace(kw))
+			if kw != "" && strings.Contains(name, kw) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func escapePS(s string) string {
