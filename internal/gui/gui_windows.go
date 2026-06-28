@@ -22,6 +22,7 @@ const (
 	wmPaint        = 0x000F
 	wmCommand      = 0x0111
 	wmTimer        = 0x0113
+	wmDpiChanged   = 0x02E0
 	wmUser         = 0x0400
 	wmTrayIcon     = wmUser + 1
 	wmLButtonUp    = 0x0202
@@ -73,6 +74,13 @@ const (
 	defaultCharset = 1
 	cleartype      = 5
 	refreshTimerID = 1
+	designWidth    = 960
+	designHeight   = 700
+	mmText         = 1
+	mmAnisotropic  = 8
+	logPixelsX     = 88
+	swpNoZOrder    = 0x0004
+	swpNoActivate  = 0x0010
 )
 
 const (
@@ -122,6 +130,14 @@ var (
 	procSetTimer         = user32.NewProc("SetTimer")
 	procKillTimer        = user32.NewProc("KillTimer")
 	procSetWindowTextW   = user32.NewProc("SetWindowTextW")
+	procSetWindowPos     = user32.NewProc("SetWindowPos")
+	procGetDC            = user32.NewProc("GetDC")
+	procReleaseDC        = user32.NewProc("ReleaseDC")
+	procSetMapMode       = gdi32.NewProc("SetMapMode")
+	procSetWindowExtEx   = gdi32.NewProc("SetWindowExtEx")
+	procSetViewportExtEx = gdi32.NewProc("SetViewportExtEx")
+	procSetViewportOrgEx = gdi32.NewProc("SetViewportOrgEx")
+	procGetDeviceCaps    = gdi32.NewProc("GetDeviceCaps")
 	procGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
 	procCreateSolidBrush = gdi32.NewProc("CreateSolidBrush")
 	procCreatePen        = gdi32.NewProc("CreatePen")
@@ -246,8 +262,7 @@ func Run(ctx context.Context, controller *app.Controller, showWindow bool) error
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	// 在 HiDPI 屏幕上使字体和图形清晰渲染，避免 Windows 位图缩放模糊
-	user32.NewProc("SetProcessDPIAware").Call()
+	uiScale := enableDPIAwareness()
 
 	if err := controller.Start(ctx); err != nil {
 		return err
@@ -294,13 +309,14 @@ func Run(ctx context.Context, controller *app.Controller, showWindow bool) error
 
 	title := utf16Ptr("Domain VPN Router")
 	style := uintptr(wsOverlapped | wsCaption | wsSysMenu | wsThickFrame | wsMinimizeBox | wsMaximizeBox)
+	winW, winH := scaledWindowSize(uiScale)
 	r.hwnd, _, _ = procCreateWindowExW.Call(
 		0,
 		uintptr(unsafe.Pointer(className)),
 		uintptr(unsafe.Pointer(title)),
 		style,
 		uintptr(cwUseDefault), uintptr(cwUseDefault),
-		880, 640,
+		uintptr(winW), uintptr(winH),
 		0, 0, instance, 0,
 	)
 	if r.hwnd == 0 {
@@ -356,7 +372,7 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		return 0
 	case wmLButtonUp:
 		if r != nil {
-			r.handleClick(pointFromLParam(lParam))
+			r.handleClick(r.clientToLogical(pointFromLParam(lParam)))
 			return 0
 		}
 	case wmPaint:
@@ -369,6 +385,15 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			r.invalidate()
 			return 0
 		}
+	case wmDpiChanged:
+		suggested := (*rect)(unsafe.Pointer(lParam))
+		procSetWindowPos.Call(
+			hwnd, 0,
+			uintptr(suggested.Left), uintptr(suggested.Top),
+			uintptr(suggested.Right-suggested.Left), uintptr(suggested.Bottom-suggested.Top),
+			swpNoZOrder|swpNoActivate,
+		)
+		return 0
 	case wmClose:
 		procShowWindow.Call(hwnd, swHide)
 		return 0
@@ -718,6 +743,9 @@ func (r *runner) paint() {
 	defer procEndPaint.Call(r.hwnd, uintptr(unsafe.Pointer(&ps)))
 	var rc rect
 	procGetClientRect.Call(r.hwnd, uintptr(unsafe.Pointer(&rc)))
+	beginLogicalSpace(hdc, rc)
+	defer endLogicalSpace(hdc)
+	rc = rect{Left: 0, Top: 0, Right: designWidth, Bottom: designHeight}
 	status := r.currentStatus()
 	r.hits = nil
 
@@ -1202,4 +1230,68 @@ func createAppIcon(instance uintptr) uintptr {
 func utf16Ptr(s string) *uint16 {
 	s = strings.ReplaceAll(s, "\n", "\r\n")
 	return syscall.StringToUTF16Ptr(s)
+}
+
+func enableDPIAwareness() float64 {
+	setCtx := user32.NewProc("SetProcessDpiAwarenessContext")
+	if err := setCtx.Find(); err == nil {
+		const perMonitorV2 = ^uintptr(3) // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 (-4)
+		if ok, _, _ := setCtx.Call(perMonitorV2); ok != 0 {
+			return systemUIScale()
+		}
+	}
+	user32.NewProc("SetProcessDPIAware").Call()
+	return systemUIScale()
+}
+
+func systemUIScale() float64 {
+	getDpi := user32.NewProc("GetDpiForSystem")
+	if err := getDpi.Find(); err == nil {
+		dpi, _, _ := getDpi.Call()
+		if dpi > 0 {
+			return float64(dpi) / 96.0
+		}
+	}
+	hdc, _, _ := procGetDC.Call(0)
+	if hdc == 0 {
+		return 1.0
+	}
+	defer procReleaseDC.Call(0, hdc)
+	dpi, _, _ := procGetDeviceCaps.Call(hdc, logPixelsX)
+	if dpi == 0 {
+		return 1.0
+	}
+	return float64(dpi) / 96.0
+}
+
+func scaledWindowSize(scale float64) (int32, int32) {
+	if scale < 1 {
+		scale = 1
+	}
+	return int32(float64(designWidth) * scale), int32(float64(designHeight) * scale)
+}
+
+func beginLogicalSpace(hdc uintptr, rc rect) {
+	procSetMapMode.Call(hdc, mmAnisotropic)
+	procSetWindowExtEx.Call(hdc, designWidth, designHeight, 0)
+	procSetViewportExtEx.Call(hdc, uintptr(rc.Right-rc.Left), uintptr(rc.Bottom-rc.Top), 0)
+	procSetViewportOrgEx.Call(hdc, 0, 0, 0)
+}
+
+func endLogicalSpace(hdc uintptr) {
+	procSetMapMode.Call(hdc, mmText)
+}
+
+func (r *runner) clientToLogical(p point) point {
+	var rc rect
+	procGetClientRect.Call(r.hwnd, uintptr(unsafe.Pointer(&rc)))
+	w := rc.Right - rc.Left
+	h := rc.Bottom - rc.Top
+	if w <= 0 || h <= 0 {
+		return p
+	}
+	return point{
+		X: int32(int64(p.X) * int64(designWidth) / int64(w)),
+		Y: int32(int64(p.Y) * int64(designHeight) / int64(h)),
+	}
 }
