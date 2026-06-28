@@ -3,6 +3,7 @@ app:
   minimize_to_tray: true
   show_window_on_start: false
   # Optional. Empty means logs are kept in memory only.
+  
   log_file:
 
 proxy:
