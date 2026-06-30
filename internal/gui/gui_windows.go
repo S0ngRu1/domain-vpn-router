@@ -529,7 +529,11 @@ func (r *runner) handleCommand(command int) {
 		r.applyModeAsync(app.ModeDirect)
 	case cmdRestoreProxy:
 		go func() {
-			_ = r.controller.RestoreProxy()
+			if err := r.controller.RestoreProxy(); err != nil {
+				r.notice = "恢复失败: " + err.Error()
+			} else {
+				r.notice = "系统代理已恢复"
+			}
 			r.invalidate()
 		}()
 	case cmdShow:

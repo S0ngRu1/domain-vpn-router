@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 	"syscall"
@@ -24,12 +25,15 @@ func Enable(listen, statePath string) error {
 	if runtime.GOOS != "windows" {
 		return fmt.Errorf("系统代理设置目前只支持 Windows")
 	}
-	state, err := readCurrent()
-	if err != nil {
-		return err
-	}
-	if err := saveState(statePath, state); err != nil {
-		return err
+	// 只在首次启用时备份，避免重复 Enable 把当前代理地址覆盖进备份文件。
+	if _, err := os.Stat(statePath); errors.Is(err, os.ErrNotExist) {
+		state, err := readCurrent()
+		if err != nil {
+			return err
+		}
+		if err := saveState(statePath, state); err != nil {
+			return err
+		}
 	}
 	if err := regAddDWORD("ProxyEnable", "1"); err != nil {
 		return err
@@ -156,13 +160,27 @@ func regAddSZ(name, value string) error {
 func regDelete(name string) error {
 	out, err := hiddenexec.Command("reg", "delete", internetSettingsKey, "/v", name, "/f").CombinedOutput()
 	if err != nil {
+		// reg 在注册表值本就不存在时返回 exit 1；中文 Windows 的错误信息是 GBK，
+		// 不能依赖 UTF-8 字符串匹配「找不到」。
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return nil
+		}
 		text := strings.TrimSpace(string(out))
-		if strings.Contains(text, "找不到") || strings.Contains(strings.ToLower(text), "unable to find") {
+		if regValueMissing(text) {
 			return nil
 		}
 		return fmt.Errorf("删除 %s 失败: %w: %s", name, err, text)
 	}
 	return nil
+}
+
+func regValueMissing(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(text, "找不到") ||
+		strings.Contains(lower, "unable to find") ||
+		strings.Contains(lower, "cannot find") ||
+		strings.Contains(lower, "was not found")
 }
 
 func notifyWindows() error {
