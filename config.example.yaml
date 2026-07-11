@@ -11,22 +11,23 @@ proxy:
   # Optional. Bind direct connections to a local NIC IP to avoid a TUN adapter
   # becoming the default route for direct traffic. Leave empty to use OS routing.
   direct_bind_ip:
-  # Optional. Forward foreign traffic to the local mixed-port of Tyty / Mihomo.
+  # Optional. Forward foreign traffic to the local mixed-port of Clash Verge.
   foreign_proxy:
 
 vpn:
-  tyty:
-    exe: C:\Program Files\Tyty\Tyty.exe
-    process: Tyty
+  clash_verge:
+    exe: C:\Program Files\Clash Verge\Clash Verge.exe
+    process: Clash Verge
     # Optional PowerShell command used before switching to GlobalProtect.
     stop_command:
     adapter_keywords:
       - Mihomo
       - Meta Tunnel
+      - Clash
   globalprotect:
     exe: C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe
     process: PanGPA
-    # Optional PowerShell command used before switching to Tyty.
+    # Optional PowerShell command used before switching modes manually.
     stop_command:
     adapter_keywords:
       - PANGP
@@ -38,7 +39,7 @@ rules:
     - company.example.com
     - "*.corp.example.com"
 
-  # Foreign domains. Matched requests start Tyty.
+  # Foreign domains. Matched requests are forwarded to proxy.foreign_proxy.
   foreign_domains:
     - google.com
     - "*.google.com"

@@ -24,7 +24,11 @@ func NewManager(cfg config.VPNConfig) *Manager {
 }
 
 func (m *Manager) EnsureTyty(ctx context.Context) error {
-	return m.ensure(ctx, "Tyty", m.cfg.Tyty)
+	return m.EnsureClashVerge(ctx)
+}
+
+func (m *Manager) EnsureClashVerge(ctx context.Context) error {
+	return m.ensure(ctx, "Clash Verge", m.cfg.ClashVerge)
 }
 
 func (m *Manager) EnsureGlobalProtect(ctx context.Context) error {
@@ -32,7 +36,11 @@ func (m *Manager) EnsureGlobalProtect(ctx context.Context) error {
 }
 
 func (m *Manager) StopTyty(ctx context.Context) error {
-	return m.stop(ctx, "Tyty", m.cfg.Tyty)
+	return m.StopClashVerge(ctx)
+}
+
+func (m *Manager) StopClashVerge(ctx context.Context) error {
+	return m.stop(ctx, "Clash Verge", m.cfg.ClashVerge)
 }
 
 func (m *Manager) StopGlobalProtect(ctx context.Context) error {
@@ -40,7 +48,11 @@ func (m *Manager) StopGlobalProtect(ctx context.Context) error {
 }
 
 func (m *Manager) TytyUp(ctx context.Context) bool {
-	up, _ := adapterUp(ctx, m.cfg.Tyty.AdapterKeywords)
+	return m.ClashVergeUp(ctx)
+}
+
+func (m *Manager) ClashVergeUp(ctx context.Context) bool {
+	up, _ := adapterUp(ctx, m.cfg.ClashVerge.AdapterKeywords)
 	return up
 }
 

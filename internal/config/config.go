@@ -28,7 +28,7 @@ type ProxyConfig struct {
 }
 
 type VPNConfig struct {
-	Tyty          VPNEndpoint
+	ClashVerge    VPNEndpoint
 	GlobalProtect VPNEndpoint
 }
 
@@ -68,8 +68,8 @@ func Load(path string) (Config, error) {
 		if strings.HasPrefix(trimmed, "- ") {
 			item := unquote(strings.TrimSpace(strings.TrimPrefix(trimmed, "- ")))
 			switch list {
-			case "vpn.tyty.adapter_keywords":
-				cfg.VPN.Tyty.AdapterKeywords = append(cfg.VPN.Tyty.AdapterKeywords, item)
+			case "vpn.tyty.adapter_keywords", "vpn.clash_verge.adapter_keywords":
+				cfg.VPN.ClashVerge.AdapterKeywords = append(cfg.VPN.ClashVerge.AdapterKeywords, item)
 			case "vpn.globalprotect.adapter_keywords":
 				cfg.VPN.GlobalProtect.AdapterKeywords = append(cfg.VPN.GlobalProtect.AdapterKeywords, item)
 			case "rules.company_domains":
@@ -79,14 +79,14 @@ func Load(path string) (Config, error) {
 			case "rules.direct_domains":
 				cfg.Rules.DirectDomains = append(cfg.Rules.DirectDomains, item)
 			default:
-				return Config{}, fmt.Errorf("未知列表项: %s", raw)
+				return Config{}, fmt.Errorf("鏈煡鍒楄〃椤? %s", raw)
 			}
 			continue
 		}
 
 		key, value, ok := strings.Cut(trimmed, ":")
 		if !ok {
-			return Config{}, fmt.Errorf("非法配置行: %s", raw)
+			return Config{}, fmt.Errorf("闈炴硶閰嶇疆琛? %s", raw)
 		}
 		key = strings.TrimSpace(key)
 		value = unquote(strings.TrimSpace(value))
@@ -128,12 +128,12 @@ func Load(path string) (Config, error) {
 			cfg.Proxy.DirectBindIP = value
 		case section == "proxy" && key == "foreign_proxy":
 			cfg.Proxy.ForeignProxy = value
-		case section == "vpn" && subsection == "tyty" && key == "exe":
-			cfg.VPN.Tyty.Exe = value
-		case section == "vpn" && subsection == "tyty" && key == "process":
-			cfg.VPN.Tyty.Process = value
-		case section == "vpn" && subsection == "tyty" && key == "stop_command":
-			cfg.VPN.Tyty.StopCommand = value
+		case section == "vpn" && (subsection == "tyty" || subsection == "clash_verge") && key == "exe":
+			cfg.VPN.ClashVerge.Exe = value
+		case section == "vpn" && (subsection == "tyty" || subsection == "clash_verge") && key == "process":
+			cfg.VPN.ClashVerge.Process = value
+		case section == "vpn" && (subsection == "tyty" || subsection == "clash_verge") && key == "stop_command":
+			cfg.VPN.ClashVerge.StopCommand = value
 		case section == "vpn" && subsection == "globalprotect" && key == "exe":
 			cfg.VPN.GlobalProtect.Exe = value
 		case section == "vpn" && subsection == "globalprotect" && key == "process":
@@ -141,33 +141,33 @@ func Load(path string) (Config, error) {
 		case section == "vpn" && subsection == "globalprotect" && key == "stop_command":
 			cfg.VPN.GlobalProtect.StopCommand = value
 		default:
-			return Config{}, fmt.Errorf("未知配置项: %s", raw)
+			return Config{}, fmt.Errorf("鏈煡閰嶇疆椤? %s", raw)
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return Config{}, err
 	}
 	if cfg.Proxy.Listen == "" {
-		return Config{}, fmt.Errorf("缺少 proxy.listen")
+		return Config{}, fmt.Errorf("缂哄皯 proxy.listen")
 	}
 	if cfg.App.StartMode == "" {
 		cfg.App.StartMode = "auto"
 	}
 	cfg.App.MinimizeToTray = true
-	if cfg.VPN.Tyty.Exe == "" {
-		return Config{}, fmt.Errorf("缺少 vpn.tyty.exe")
+	if cfg.VPN.ClashVerge.Exe == "" {
+		return Config{}, fmt.Errorf("缂哄皯 vpn.tyty.exe")
 	}
 	if cfg.VPN.GlobalProtect.Exe == "" {
-		return Config{}, fmt.Errorf("缺少 vpn.globalprotect.exe")
+		return Config{}, fmt.Errorf("缂哄皯 vpn.globalprotect.exe")
 	}
-	if cfg.VPN.Tyty.Process == "" {
-		cfg.VPN.Tyty.Process = "Tyty"
+	if cfg.VPN.ClashVerge.Process == "" {
+		cfg.VPN.ClashVerge.Process = "Clash Verge"
 	}
 	if cfg.VPN.GlobalProtect.Process == "" {
 		cfg.VPN.GlobalProtect.Process = "PanGPA"
 	}
-	if len(cfg.VPN.Tyty.AdapterKeywords) == 0 {
-		cfg.VPN.Tyty.AdapterKeywords = []string{"Mihomo", "Meta Tunnel"}
+	if len(cfg.VPN.ClashVerge.AdapterKeywords) == 0 {
+		cfg.VPN.ClashVerge.AdapterKeywords = []string{"Mihomo", "Meta Tunnel", "Clash"}
 	}
 	if len(cfg.VPN.GlobalProtect.AdapterKeywords) == 0 {
 		cfg.VPN.GlobalProtect.AdapterKeywords = []string{"PANGP", "GlobalProtect"}
@@ -197,7 +197,7 @@ func UpdateProxyDirectBindIP(path, value string) error {
 		}
 	}
 	if !updated {
-		return fmt.Errorf("未找到 proxy.direct_bind_ip")
+		return fmt.Errorf("鏈壘鍒?proxy.direct_bind_ip")
 	}
 	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600)
 }

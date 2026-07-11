@@ -85,7 +85,7 @@ const (
 
 const (
 	cmdAuto = 1001 + iota
-	cmdTyty
+	cmdClash
 	cmdGlobalProtect
 	cmdDirect
 	cmdRestoreProxy
@@ -163,7 +163,7 @@ const (
 	hitTabLogs
 	hitTabSettings
 	hitModeAuto
-	hitModeTyty
+	hitModeClash
 	hitModeGlobalProtect
 	hitModeDirect
 	hitUseCurrentIP
@@ -488,7 +488,7 @@ func (r *runner) showMenu() {
 	appendMenu(menu, mfString|mfGrayed, 0, "当前模式: "+modeTitle(status.Mode))
 	appendMenu(menu, mfSeparator, 0, "")
 	appendMenu(menu, mfString, cmdAuto, "自动分流")
-	appendMenu(menu, mfString, cmdTyty, "强制 Tyty")
+	appendMenu(menu, mfString, cmdClash, "强制 Clash")
 	appendMenu(menu, mfString, cmdGlobalProtect, "强制 GlobalProtect")
 	appendMenu(menu, mfString, cmdDirect, "本地直连")
 	procCheckMenuRadio.Call(menu, cmdAuto, cmdDirect, modeCommand(status.Mode), 0)
@@ -521,8 +521,8 @@ func (r *runner) handleCommand(command int) {
 	switch command {
 	case cmdAuto:
 		r.applyModeAsync(app.ModeAuto)
-	case cmdTyty:
-		r.applyModeAsync(app.ModeTyty)
+	case cmdClash:
+		r.applyModeAsync(app.ModeClash)
 	case cmdGlobalProtect:
 		r.applyModeAsync(app.ModeGlobalProtect)
 	case cmdDirect:
@@ -567,7 +567,7 @@ func (r *runner) paintTrayMenu(hwnd uintptr) {
 
 	top := panel.Top + 66
 	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top, Right: panel.Right - 8, Bottom: top + 28}, "自动分流", "AUTO", status.Mode == app.ModeAuto, cmdAuto)
-	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top + 31, Right: panel.Right - 8, Bottom: top + 59}, "强制 Tyty", "TY", status.Mode == app.ModeTyty, cmdTyty)
+	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top + 31, Right: panel.Right - 8, Bottom: top + 59}, "强制 Clash", "CV", status.Mode == app.ModeClash, cmdClash)
 	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top + 62, Right: panel.Right - 8, Bottom: top + 90}, "强制 GlobalProtect", "GP", status.Mode == app.ModeGlobalProtect, cmdGlobalProtect)
 	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top + 93, Right: panel.Right - 8, Bottom: top + 121}, "本地直连", "DIR", status.Mode == app.ModeDirect, cmdDirect)
 
@@ -631,8 +631,8 @@ func (r *runner) handleClick(p point) {
 			r.settingsBindIP = r.controller.DirectBindIP()
 		case hitModeAuto:
 			r.applyModeAsync(app.ModeAuto)
-		case hitModeTyty:
-			r.applyModeAsync(app.ModeTyty)
+		case hitModeClash:
+			r.applyModeAsync(app.ModeClash)
 		case hitModeGlobalProtect:
 			r.applyModeAsync(app.ModeGlobalProtect)
 		case hitModeDirect:
@@ -727,7 +727,7 @@ func (r *runner) updateStatus(status app.Status, keepVPN bool) {
 	r.statusMu.Lock()
 	defer r.statusMu.Unlock()
 	if keepVPN {
-		status.TytyUp = r.status.TytyUp
+		status.ClashUp = r.status.ClashUp
 		status.GlobalUp = r.status.GlobalUp
 	}
 	r.status = status
@@ -823,13 +823,13 @@ func (r *runner) drawStatusPage(hdc uintptr, rc rect, status app.Status) {
 	modeTop := rc.Top + 106
 	buttonWidth := (rc.Right - rc.Left - gap*3) / 4
 	r.drawModeButton(hdc, rect{Left: rc.Left, Top: modeTop, Right: rc.Left + buttonWidth, Bottom: modeTop + 88}, "AUTO", "自动分流", "按域名规则选择", status.Mode == app.ModeAuto, hitModeAuto)
-	r.drawModeButton(hdc, rect{Left: rc.Left + (buttonWidth+gap)*1, Top: modeTop, Right: rc.Left + (buttonWidth+gap)*1 + buttonWidth, Bottom: modeTop + 88}, "TY", "强制 Tyty", "全部公网走 Tyty", status.Mode == app.ModeTyty, hitModeTyty)
+	r.drawModeButton(hdc, rect{Left: rc.Left + (buttonWidth+gap)*1, Top: modeTop, Right: rc.Left + (buttonWidth+gap)*1 + buttonWidth, Bottom: modeTop + 88}, "CV", "强制 Clash", "全部外网走 Clash", status.Mode == app.ModeClash, hitModeClash)
 	r.drawModeButton(hdc, rect{Left: rc.Left + (buttonWidth+gap)*2, Top: modeTop, Right: rc.Left + (buttonWidth+gap)*2 + buttonWidth, Bottom: modeTop + 88}, "GP", "强制 GP", "全部公网走公司 VPN", status.Mode == app.ModeGlobalProtect, hitModeGlobalProtect)
 	r.drawModeButton(hdc, rect{Left: rc.Left + (buttonWidth+gap)*3, Top: modeTop, Right: rc.Right, Bottom: modeTop + 88}, "DIR", "本地直连", "关闭系统代理", status.Mode == app.ModeDirect, hitModeDirect)
 
 	vpnTop := modeTop + 104
 	vpnWidth := (rc.Right - rc.Left - gap) / 2
-	drawVPNCard(hdc, rect{Left: rc.Left, Top: vpnTop, Right: rc.Left + vpnWidth, Bottom: vpnTop + 78}, "Tyty", status.TytyUp, "TY")
+	drawVPNCard(hdc, rect{Left: rc.Left, Top: vpnTop, Right: rc.Left + vpnWidth, Bottom: vpnTop + 78}, "Clash Verge", status.ClashUp, "CV")
 	drawVPNCard(hdc, rect{Left: rc.Left + vpnWidth + gap, Top: vpnTop, Right: rc.Right, Bottom: vpnTop + 78}, "GlobalProtect", status.GlobalUp, "GP")
 
 	if status.LastError != "" {
@@ -889,8 +889,8 @@ func appendMenu(menu uintptr, flags uintptr, id uintptr, text string) {
 
 func modeCommand(mode app.Mode) uintptr {
 	switch mode {
-	case app.ModeTyty:
-		return cmdTyty
+	case app.ModeClash:
+		return cmdClash
 	case app.ModeGlobalProtect:
 		return cmdGlobalProtect
 	case app.ModeDirect:
@@ -935,8 +935,8 @@ func (r *runner) drawModeButton(hdc uintptr, rc rect, code, title, subtitle stri
 // modFromCode 将模式代码映射到 app.Mode，用于 modeColor 查找
 func modFromCode(code string) app.Mode {
 	switch code {
-	case "TY":
-		return app.ModeTyty
+	case "CV":
+		return app.ModeClash
 	case "GP":
 		return app.ModeGlobalProtect
 	case "DIR":
@@ -1124,8 +1124,8 @@ func boolText(ok bool) string {
 
 func modeTitle(mode app.Mode) string {
 	switch mode {
-	case app.ModeTyty:
-		return "强制 Tyty"
+	case app.ModeClash:
+		return "强制 Clash"
 	case app.ModeGlobalProtect:
 		return "强制 GlobalProtect"
 	case app.ModeDirect:
@@ -1137,7 +1137,7 @@ func modeTitle(mode app.Mode) string {
 
 func modeColor(mode app.Mode) uintptr {
 	switch mode {
-	case app.ModeTyty:
+	case app.ModeClash:
 		return rgb(128, 58, 238)
 	case app.ModeGlobalProtect:
 		return rgb(28, 108, 238)

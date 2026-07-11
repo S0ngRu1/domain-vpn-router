@@ -10,7 +10,7 @@ func TestLoadConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	body := `app:
-  start_mode: tyty
+  start_mode: clash
   minimize_to_tray: true
   show_window_on_start: true
 proxy:
@@ -18,10 +18,10 @@ proxy:
   direct_bind_ip: 192.168.1.186
   foreign_proxy: 127.0.0.1:9674
 vpn:
-  tyty:
-    exe: C:\Program Files\Tyty\Tyty.exe
-    process: Tyty
-    stop_command: Write-Output stop-tyty
+  clash_verge:
+    exe: C:\Program Files\Clash Verge\Clash Verge.exe
+    process: Clash Verge
+    stop_command: Write-Output stop-clash
     adapter_keywords:
       - Mihomo
   globalprotect:
@@ -54,13 +54,13 @@ rules:
 	if cfg.Proxy.ForeignProxy != "127.0.0.1:9674" {
 		t.Fatalf("unexpected foreign proxy: %s", cfg.Proxy.ForeignProxy)
 	}
-	if cfg.App.StartMode != "tyty" || !cfg.App.ShowWindowOnStart || !cfg.App.MinimizeToTray {
+	if cfg.App.StartMode != "clash" || !cfg.App.ShowWindowOnStart || !cfg.App.MinimizeToTray {
 		t.Fatalf("unexpected app config: %#v", cfg.App)
 	}
-	if cfg.VPN.Tyty.StopCommand == "" || cfg.VPN.GlobalProtect.StopCommand == "" {
+	if cfg.VPN.ClashVerge.StopCommand == "" || cfg.VPN.GlobalProtect.StopCommand == "" {
 		t.Fatalf("stop command should be loaded")
 	}
-	if cfg.VPN.Tyty.Exe == "" || cfg.VPN.GlobalProtect.Exe == "" {
+	if cfg.VPN.ClashVerge.Exe == "" || cfg.VPN.GlobalProtect.Exe == "" {
 		t.Fatalf("vpn exe should be loaded")
 	}
 	if len(cfg.Rules.CompanyDomains) != 1 || cfg.Rules.CompanyDomains[0] != "*.corp.example.com" {
@@ -72,8 +72,8 @@ func TestLoadConfigRequiresListen(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	body := `vpn:
-  tyty:
-    exe: C:\Program Files\Tyty\Tyty.exe
+  clash_verge:
+    exe: C:\Program Files\Clash Verge\Clash Verge.exe
   globalprotect:
     exe: C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe
 `

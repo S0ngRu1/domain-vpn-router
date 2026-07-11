@@ -29,7 +29,7 @@ type companyIPer interface {
 type Server struct {
 	server          *http.Server
 	router          Router
-	directBindIPStr string   // 配置的静态 IP（空 = 自动检测）
+	directBindIPStr string // 配置的静态 IP（空 = 自动检测）
 	foreignProxy    string
 	excludeAdapters []string // 动态检测时排除的网卡名称关键词
 	mu              sync.RWMutex
@@ -161,6 +161,13 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, match rules.
 
 func (s *Server) dial(ctx context.Context, action rules.Action, address string) (net.Conn, error) {
 	bindIP := s.currentPhysicalIP()
+	companyIP := net.IP(nil)
+	if action == rules.ActionCompany {
+		if r, ok := s.router.(companyIPer); ok {
+			companyIP = r.CompanyAdapterIP()
+		}
+	}
+	action = effectiveDialAction(action, companyIP)
 	dialer := &net.Dialer{
 		Timeout:   15 * time.Second,
 		KeepAlive: 30 * time.Second,
@@ -169,10 +176,8 @@ func (s *Server) dial(ctx context.Context, action rules.Action, address string) 
 		dialer.LocalAddr = &net.TCPAddr{IP: bindIP}
 	}
 	if action == rules.ActionCompany {
-		if r, ok := s.router.(companyIPer); ok {
-			if ip := r.CompanyAdapterIP(); ip != nil {
-				dialer.LocalAddr = &net.TCPAddr{IP: ip}
-			}
+		if companyIP != nil {
+			dialer.LocalAddr = &net.TCPAddr{IP: companyIP}
 		}
 	}
 	if action == rules.ActionDirect {
@@ -193,6 +198,13 @@ func (s *Server) dial(ctx context.Context, action rules.Action, address string) 
 		}
 	}
 	return dialer.DialContext(ctx, "tcp", address)
+}
+
+func effectiveDialAction(action rules.Action, companyIP net.IP) rules.Action {
+	if action == rules.ActionCompany && companyIP == nil {
+		return rules.ActionDirect
+	}
+	return action
 }
 
 func (s *Server) dialHTTPProxy(ctx context.Context, proxyAddr, target string) (net.Conn, error) {

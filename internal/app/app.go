@@ -20,7 +20,8 @@ type Mode string
 
 const (
 	ModeAuto          Mode = "auto"
-	ModeTyty          Mode = "tyty"
+	ModeClash         Mode = "clash"
+	ModeTyty          Mode = ModeClash
 	ModeGlobalProtect Mode = "globalprotect"
 	ModeDirect        Mode = "direct"
 )
@@ -31,6 +32,7 @@ type Status struct {
 	DirectBindIP  string
 	ProxyRunning  bool
 	SystemProxyOn bool
+	ClashUp       bool
 	TytyUp        bool
 	GlobalUp      bool
 	LastError     string
@@ -70,8 +72,8 @@ func NewController(cfg config.Config, configPath, statePath string) *Controller 
 
 func NormalizeMode(mode string) Mode {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case string(ModeTyty):
-		return ModeTyty
+	case string(ModeClash), "clash-verge", "clashverge", "tyty":
+		return ModeClash
 	case string(ModeGlobalProtect), "gp", "global":
 		return ModeGlobalProtect
 	case string(ModeDirect):
@@ -88,7 +90,7 @@ func (c *Controller) Start(ctx context.Context) error {
 		return nil
 	}
 	excludeAdapters := append(
-		append([]string(nil), c.cfg.VPN.Tyty.AdapterKeywords...),
+		append([]string(nil), c.cfg.VPN.ClashVerge.AdapterKeywords...),
 		c.cfg.VPN.GlobalProtect.AdapterKeywords...,
 	)
 	c.proxy = proxy.New(c.cfg.Proxy.Listen, c.cfg.Proxy.DirectBindIP, c.cfg.Proxy.ForeignProxy, c, excludeAdapters)
@@ -106,12 +108,13 @@ func (c *Controller) Start(ctx context.Context) error {
 	go func() {
 		c.addLog("域名分流代理已启动: %s", c.cfg.Proxy.Listen)
 		if err := c.proxy.ListenAndServe(); err != nil {
+			c.setProxyRunning(false)
 			c.setError("代理服务失败: %v", err)
 		}
 	}()
 	c.setProxyRunning(true)
 
-	if c.Mode() == ModeTyty || c.Mode() == ModeGlobalProtect {
+	if c.Mode() == ModeClash || c.Mode() == ModeGlobalProtect {
 		go func() {
 			if err := c.ApplyMode(context.Background(), c.Mode()); err != nil {
 				c.setError("启动初始模式失败: %v", err)
@@ -145,9 +148,9 @@ func (c *Controller) Route(ctx context.Context, target string) (rules.Match, err
 	match := c.matcher.Match(target)
 
 	switch mode {
-	case ModeTyty:
+	case ModeClash:
 		if !rules.IsLocalDirect(match) {
-			match = rules.Match{Action: rules.ActionForeign, Rule: "manual-tyty"}
+			match = rules.Match{Action: rules.ActionForeign, Rule: "manual-clash"}
 		}
 	case ModeGlobalProtect:
 		if !rules.IsLocalDirect(match) {
@@ -158,22 +161,16 @@ func (c *Controller) Route(ctx context.Context, target string) (rules.Match, err
 	}
 
 	c.addLog("访问目标=%s 动作=%s 规则=%s 模式=%s", target, match.Action, match.Rule, mode)
-	switchCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
 	switch match.Action {
 	case rules.ActionCompany:
-		if err := c.manager.EnsureGlobalProtect(switchCtx); err != nil {
-			c.setError("切换 GlobalProtect 失败: %v", err)
-			return match, err
-		}
+		return match, nil
 	case rules.ActionForeign:
 		if strings.TrimSpace(c.cfg.Proxy.ForeignProxy) != "" {
 			return match, nil
 		}
-		if err := c.manager.EnsureTyty(switchCtx); err != nil {
-			c.setError("切换 Tyty 失败: %v", err)
-			return match, err
-		}
+		err := fmt.Errorf("foreign traffic requires proxy.foreign_proxy for Clash Verge")
+		c.setError("Clash Verge 上游代理未配置: %v", err)
+		return match, err
 	}
 	return match, nil
 }
@@ -188,17 +185,15 @@ func (c *Controller) ApplyMode(ctx context.Context, mode Mode) error {
 		return c.RestoreProxy()
 	case ModeAuto:
 		return c.EnableProxy()
-	case ModeTyty:
+	case ModeClash:
 		if err := c.EnableProxy(); err != nil {
 			return err
 		}
-		_ = c.manager.StopGlobalProtect(ctx)
-		return c.manager.EnsureTyty(ctx)
+		return c.manager.EnsureClashVerge(ctx)
 	case ModeGlobalProtect:
 		if err := c.EnableProxy(); err != nil {
 			return err
 		}
-		_ = c.manager.StopTyty(ctx)
 		return c.manager.EnsureGlobalProtect(ctx)
 	default:
 		return fmt.Errorf("未知模式: %s", mode)
@@ -233,7 +228,8 @@ func (c *Controller) Mode() Mode {
 
 func (c *Controller) Status(ctx context.Context) Status {
 	status := c.StatusSnapshot()
-	status.TytyUp = c.manager.TytyUp(ctx)
+	status.ClashUp = c.manager.ClashVergeUp(ctx)
+	status.TytyUp = status.ClashUp
 	status.GlobalUp = c.manager.GlobalProtectUp(ctx)
 	return status
 }
@@ -258,7 +254,7 @@ func (c *Controller) CompanyAdapterIP() net.IP {
 
 func (c *Controller) PhysicalAdapterIP() string {
 	excludeAdapters := append(
-		append([]string(nil), c.cfg.VPN.Tyty.AdapterKeywords...),
+		append([]string(nil), c.cfg.VPN.ClashVerge.AdapterKeywords...),
 		c.cfg.VPN.GlobalProtect.AdapterKeywords...,
 	)
 	return proxy.DynamicPhysicalIPStr(excludeAdapters)
@@ -299,13 +295,13 @@ func (c *Controller) StatusText(ctx context.Context) string {
 		fmt.Sprintf("代理监听: %s", status.ProxyListen),
 		fmt.Sprintf("代理运行: %v", status.ProxyRunning),
 		fmt.Sprintf("系统代理: %v", status.SystemProxyOn),
-		fmt.Sprintf("Tyty 网卡: %v", status.TytyUp),
+		fmt.Sprintf("Clash Verge 网卡: %v", status.ClashUp),
 		fmt.Sprintf("GlobalProtect 网卡: %v", status.GlobalUp),
 	}
 	if status.LastError != "" {
 		lines = append(lines, fmt.Sprintf("最近错误: %s", status.LastError))
 	}
-	lines = append(lines, "", "最近日志:")
+	lines = append(lines, "", "最近日志")
 	logs := status.Logs
 	if len(logs) > 20 {
 		logs = logs[len(logs)-20:]

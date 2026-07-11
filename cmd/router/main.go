@@ -11,6 +11,7 @@ import (
 	"domain-vpn-router/internal/app"
 	"domain-vpn-router/internal/config"
 	"domain-vpn-router/internal/gui"
+	"domain-vpn-router/internal/singleinstance"
 	"domain-vpn-router/internal/systemproxy"
 )
 
@@ -24,6 +25,15 @@ func main() {
 			log.Fatalf("恢复系统代理失败: %v", err)
 		}
 		log.Printf("系统代理已恢复")
+		return
+	}
+
+	instanceLock, alreadyRunning, err := singleinstance.Acquire("DomainVPNRouter")
+	if err != nil {
+		log.Fatalf("获取单实例锁失败: %v", err)
+	}
+	defer instanceLock.Release()
+	if alreadyRunning {
 		return
 	}
 
