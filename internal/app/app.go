@@ -30,12 +30,14 @@ type Status struct {
 	Mode          Mode
 	ProxyListen   string
 	DirectBindIP  string
+	PhysicalIP    string
 	ProxyRunning  bool
 	SystemProxyOn bool
 	ClashUp       bool
 	TytyUp        bool
 	GlobalUp      bool
 	LastError     string
+	RefreshedAt   time.Time
 	Logs          []string
 }
 
@@ -53,6 +55,8 @@ type Controller struct {
 	proxyRunning  bool
 	systemProxyOn bool
 	lastError     string
+	physicalIP    string
+	refreshedAt   time.Time
 	started       bool
 	shutdownOnce  sync.Once
 }
@@ -94,6 +98,8 @@ func (c *Controller) Start(ctx context.Context) error {
 		c.cfg.VPN.GlobalProtect.AdapterKeywords...,
 	)
 	c.proxy = proxy.New(c.cfg.Proxy.Listen, c.cfg.Proxy.DirectBindIP, c.cfg.Proxy.ForeignProxy, c, excludeAdapters)
+	c.physicalIP = c.proxy.CurrentPhysicalIPStr()
+	c.refreshedAt = time.Now()
 	c.started = true
 	c.mu.Unlock()
 
@@ -160,7 +166,6 @@ func (c *Controller) Route(ctx context.Context, target string) (rules.Match, err
 		match = rules.Match{Action: rules.ActionDirect, Rule: "manual-direct"}
 	}
 
-	c.addLog("访问目标=%s 动作=%s 规则=%s 模式=%s", target, match.Action, match.Rule, mode)
 	switch match.Action {
 	case rules.ActionCompany:
 		return match, nil
@@ -234,6 +239,21 @@ func (c *Controller) Status(ctx context.Context) Status {
 	return status
 }
 
+func (c *Controller) RefreshStatus(ctx context.Context) Status {
+	clashUp := c.manager.ClashVergeUpPowerShell(ctx)
+	globalUp := c.manager.GlobalProtectUpPowerShell(ctx)
+	physicalIP := c.refreshPhysicalIP()
+	c.mu.Lock()
+	c.physicalIP = physicalIP
+	c.refreshedAt = time.Now()
+	c.mu.Unlock()
+	status := c.StatusSnapshot()
+	status.ClashUp = clashUp
+	status.TytyUp = clashUp
+	status.GlobalUp = globalUp
+	return status
+}
+
 func (c *Controller) StatusSnapshot() Status {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -241,9 +261,11 @@ func (c *Controller) StatusSnapshot() Status {
 		Mode:          c.mode,
 		ProxyListen:   c.cfg.Proxy.Listen,
 		DirectBindIP:  c.cfg.Proxy.DirectBindIP,
+		PhysicalIP:    c.physicalIP,
 		ProxyRunning:  c.proxyRunning,
 		SystemProxyOn: c.systemProxyOn,
 		LastError:     c.lastError,
+		RefreshedAt:   c.refreshedAt,
 		Logs:          c.logs.Entries(),
 	}
 }
@@ -253,6 +275,21 @@ func (c *Controller) CompanyAdapterIP() net.IP {
 }
 
 func (c *Controller) PhysicalAdapterIP() string {
+	ip := c.refreshPhysicalIP()
+	c.mu.Lock()
+	c.physicalIP = ip
+	c.refreshedAt = time.Now()
+	c.mu.Unlock()
+	return ip
+}
+
+func (c *Controller) refreshPhysicalIP() string {
+	c.mu.Lock()
+	p := c.proxy
+	c.mu.Unlock()
+	if p != nil {
+		return p.RefreshPhysicalIP()
+	}
 	excludeAdapters := append(
 		append([]string(nil), c.cfg.VPN.ClashVerge.AdapterKeywords...),
 		c.cfg.VPN.GlobalProtect.AdapterKeywords...,
@@ -276,6 +313,14 @@ func (c *Controller) UpdateDirectBindIP(value string) error {
 	if p != nil {
 		p.SetDirectBindIP(value)
 	}
+	c.mu.Lock()
+	if p != nil {
+		c.physicalIP = p.CurrentPhysicalIPStr()
+	} else {
+		c.physicalIP = value
+	}
+	c.refreshedAt = time.Now()
+	c.mu.Unlock()
 	if configPath != "" {
 		if err := config.UpdateProxyDirectBindIP(configPath, value); err != nil {
 			c.setError("保存直连绑定 IP 失败: %v", err)
@@ -295,6 +340,8 @@ func (c *Controller) StatusText(ctx context.Context) string {
 		fmt.Sprintf("代理监听: %s", status.ProxyListen),
 		fmt.Sprintf("代理运行: %v", status.ProxyRunning),
 		fmt.Sprintf("系统代理: %v", status.SystemProxyOn),
+		fmt.Sprintf("物理网卡 IP: %s", emptyStatusText(status.PhysicalIP, "未检测")),
+		fmt.Sprintf("网卡状态刷新: %s", formatStatusTime(status.RefreshedAt)),
 		fmt.Sprintf("Clash Verge 网卡: %v", status.ClashUp),
 		fmt.Sprintf("GlobalProtect 网卡: %v", status.GlobalUp),
 	}
@@ -340,6 +387,21 @@ func (c *Controller) setError(format string, args ...any) {
 
 func (c *Controller) addLog(format string, args ...any) {
 	c.logs.Add(format, args...)
+}
+
+func emptyStatusText(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func formatStatusTime(t time.Time) string {
+	if t.IsZero() {
+		return "尚未刷新"
+	}
+	return t.Format("15:04:05")
 }
 
 func ShutdownContext() (context.Context, context.CancelFunc) {

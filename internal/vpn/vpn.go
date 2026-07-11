@@ -52,12 +52,20 @@ func (m *Manager) TytyUp(ctx context.Context) bool {
 }
 
 func (m *Manager) ClashVergeUp(ctx context.Context) bool {
-	up, _ := adapterUp(ctx, m.cfg.ClashVerge.AdapterKeywords)
-	return up
+	return adapterUpFromInterfaces(m.cfg.ClashVerge.AdapterKeywords)
 }
 
 func (m *Manager) GlobalProtectUp(ctx context.Context) bool {
-	up, _ := adapterUp(ctx, m.cfg.GlobalProtect.AdapterKeywords)
+	return adapterUpFromInterfaces(m.cfg.GlobalProtect.AdapterKeywords)
+}
+
+func (m *Manager) ClashVergeUpPowerShell(ctx context.Context) bool {
+	up, _ := adapterUpPowerShell(ctx, m.cfg.ClashVerge.AdapterKeywords)
+	return up
+}
+
+func (m *Manager) GlobalProtectUpPowerShell(ctx context.Context) bool {
+	up, _ := adapterUpPowerShell(ctx, m.cfg.GlobalProtect.AdapterKeywords)
 	return up
 }
 
@@ -72,7 +80,7 @@ func (m *Manager) ensure(ctx context.Context, name string, endpoint config.VPNEn
 	if endpoint.Exe == "" {
 		return fmt.Errorf("%s 未配置 exe", name)
 	}
-	if up, err := adapterUp(ctx, endpoint.AdapterKeywords); err == nil && up {
+	if up, err := adapterUpPowerShell(ctx, endpoint.AdapterKeywords); err == nil && up {
 		log.Printf("%s 网卡已可用", name)
 		return nil
 	}
@@ -92,7 +100,7 @@ func (m *Manager) ensure(ctx context.Context, name string, endpoint config.VPNEn
 
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
-		up, err := adapterUp(ctx, endpoint.AdapterKeywords)
+		up, err := adapterUpPowerShell(ctx, endpoint.AdapterKeywords)
 		if err == nil && up {
 			log.Printf("%s 网卡已连接", name)
 			return nil
@@ -139,7 +147,7 @@ func processRunning(ctx context.Context, process string) (bool, error) {
 	return strings.TrimSpace(string(out)) != "", nil
 }
 
-func adapterUp(ctx context.Context, keywords []string) (bool, error) {
+func adapterUpPowerShell(ctx context.Context, keywords []string) (bool, error) {
 	if runtime.GOOS != "windows" {
 		return false, nil
 	}

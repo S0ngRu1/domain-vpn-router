@@ -20,7 +20,9 @@ func NewLogBuffer(limit int) *LogBuffer {
 }
 
 func (l *LogBuffer) Add(format string, args ...any) {
-	l.mu.Lock()
+	if !l.mu.TryLock() {
+		return
+	}
 	defer l.mu.Unlock()
 	line := fmt.Sprintf("%s %s", time.Now().Format("2006-01-02 15:04:05"), fmt.Sprintf(format, args...))
 	l.entries = append(l.entries, line)

@@ -21,7 +21,6 @@ const (
 	wmClose        = 0x0010
 	wmPaint        = 0x000F
 	wmCommand      = 0x0111
-	wmTimer        = 0x0113
 	wmDpiChanged   = 0x02E0
 	wmUser         = 0x0400
 	wmTrayIcon     = wmUser + 1
@@ -49,12 +48,6 @@ const (
 	nifTip         = 0x00000004
 	idcArrow       = 32512
 	idiApplication = 32512
-	mfString       = 0x00000000
-	mfGrayed       = 0x00000001
-	mfSeparator    = 0x00000800
-	tpmRightButton = 0x0002
-	tpmBottomAlign = 0x0020
-	tpmReturnCmd   = 0x0100
 	smCxScreen     = 0
 	smCyScreen     = 1
 	dtLeft         = 0x00000000
@@ -73,7 +66,6 @@ const (
 	fwBold         = 700
 	defaultCharset = 1
 	cleartype      = 5
-	refreshTimerID = 1
 	designWidth    = 960
 	designHeight   = 700
 	mmText         = 1
@@ -89,7 +81,7 @@ const (
 	cmdGlobalProtect
 	cmdDirect
 	cmdRestoreProxy
-	cmdShow
+	cmdRefreshStatus
 	cmdExit
 )
 
@@ -114,12 +106,7 @@ var (
 	procCreateIcon       = user32.NewProc("CreateIcon")
 	procDestroyIcon      = user32.NewProc("DestroyIcon")
 	procShellNotifyIconW = shell32.NewProc("Shell_NotifyIconW")
-	procCreatePopupMenu  = user32.NewProc("CreatePopupMenu")
-	procAppendMenuW      = user32.NewProc("AppendMenuW")
-	procDestroyMenu      = user32.NewProc("DestroyMenu")
-	procCheckMenuRadio   = user32.NewProc("CheckMenuRadioItem")
 	procSetForeground    = user32.NewProc("SetForegroundWindow")
-	procTrackPopupMenu   = user32.NewProc("TrackPopupMenu")
 	procGetCursorPos     = user32.NewProc("GetCursorPos")
 	procGetSystemMetrics = user32.NewProc("GetSystemMetrics")
 	procShellExecuteW    = shell32.NewProc("ShellExecuteW")
@@ -127,8 +114,6 @@ var (
 	procEndPaint         = user32.NewProc("EndPaint")
 	procGetClientRect    = user32.NewProc("GetClientRect")
 	procDrawTextW        = user32.NewProc("DrawTextW")
-	procSetTimer         = user32.NewProc("SetTimer")
-	procKillTimer        = user32.NewProc("KillTimer")
 	procSetWindowTextW   = user32.NewProc("SetWindowTextW")
 	procSetWindowPos     = user32.NewProc("SetWindowPos")
 	procGetDC            = user32.NewProc("GetDC")
@@ -169,6 +154,7 @@ const (
 	hitUseCurrentIP
 	hitClearDirectIP
 	hitSaveSettings
+	hitRefreshStatus
 	hitRestoreProxy
 	hitOpenConfig
 )
@@ -188,6 +174,7 @@ type runner struct {
 	hits           []hitTarget
 	settingsBindIP string
 	notice         string
+	logsLoadedAt   time.Time
 }
 
 type hitTarget struct {
@@ -323,11 +310,13 @@ func Run(ctx context.Context, controller *app.Controller, showWindow bool) error
 		return fmt.Errorf("创建窗口失败")
 	}
 	r.icon = icon
-	trayReady := r.addTrayIcon() == nil
-	procSetTimer.Call(r.hwnd, refreshTimerID, 1000, 0)
+	if err := r.addTrayIcon(); err != nil {
+		shutdownCtx, shutdownCancel := app.ShutdownContext()
+		defer shutdownCancel()
+		_ = controller.Shutdown(shutdownCtx)
+		return err
+	}
 	if showWindow {
-		r.showWindow()
-	} else if !trayReady {
 		r.showWindow()
 	}
 
@@ -335,7 +324,6 @@ func Run(ctx context.Context, controller *app.Controller, showWindow bool) error
 		<-runCtx.Done()
 		procDestroyWindow.Call(r.hwnd)
 	}()
-	r.startStatusRefresh()
 
 	var m msg
 	for {
@@ -362,7 +350,7 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			r.showMenu()
 			return 0
 		case wmLButtonDbl:
-			r.showWindow()
+			r.showMenu()
 			return 0
 		}
 	case wmCommand:
@@ -380,11 +368,6 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			r.paint()
 			return 0
 		}
-	case wmTimer:
-		if r != nil && wParam == refreshTimerID {
-			r.invalidate()
-			return 0
-		}
 	case wmDpiChanged:
 		suggested := (*rect)(unsafe.Pointer(lParam))
 		procSetWindowPos.Call(
@@ -399,7 +382,6 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		return 0
 	case wmDestroy:
 		if r != nil {
-			procKillTimer.Call(hwnd, refreshTimerID)
 			_ = r.deleteTrayIcon()
 			if r.iconOwned && r.icon != 0 {
 				procDestroyIcon.Call(r.icon)
@@ -475,38 +457,41 @@ func (r *runner) showMenu() {
 	if r.menuHwnd != 0 {
 		r.closeMenu()
 	}
+	r.updateStatus(r.controller.StatusSnapshot(), true)
 	var p point
 	procGetCursorPos.Call(uintptr(unsafe.Pointer(&p)))
 
-	menu, _, _ := procCreatePopupMenu.Call()
-	if menu == 0 {
-		return
+	width, height := int32(460), int32(660)
+	screenW := int32(procGetSystemMetricsValue(smCxScreen))
+	screenH := int32(procGetSystemMetricsValue(smCyScreen))
+	left := p.X - width + 8
+	top := p.Y - height + 8
+	if left < 8 {
+		left = 8
 	}
-	defer procDestroyMenu.Call(menu)
+	if top < 8 {
+		top = 8
+	}
+	if left+width > screenW-8 {
+		left = screenW - width - 8
+	}
+	if top+height > screenH-8 {
+		top = screenH - height - 8
+	}
 
-	status := r.currentStatus()
-	appendMenu(menu, mfString|mfGrayed, 0, "当前模式: "+modeTitle(status.Mode))
-	appendMenu(menu, mfSeparator, 0, "")
-	appendMenu(menu, mfString, cmdAuto, "自动分流")
-	appendMenu(menu, mfString, cmdClash, "强制 Clash")
-	appendMenu(menu, mfString, cmdGlobalProtect, "强制 GlobalProtect")
-	appendMenu(menu, mfString, cmdDirect, "本地直连")
-	procCheckMenuRadio.Call(menu, cmdAuto, cmdDirect, modeCommand(status.Mode), 0)
-	appendMenu(menu, mfSeparator, 0, "")
-	appendMenu(menu, mfString, cmdShow, "打开主窗口")
-	appendMenu(menu, mfString, cmdRestoreProxy, "恢复系统代理")
-	appendMenu(menu, mfSeparator, 0, "")
-	appendMenu(menu, mfString, cmdExit, "退出")
-
-	procSetForeground.Call(r.hwnd)
-	command, _, _ := procTrackPopupMenu.Call(
-		menu,
-		uintptr(tpmRightButton|tpmBottomAlign|tpmReturnCmd),
-		uintptr(p.X), uintptr(p.Y),
-		0, r.hwnd, 0,
+	instance, _, _ := procGetModuleHandleW.Call(0)
+	className := utf16Ptr("DomainVPNRouterMenu")
+	r.menuHwnd, _, _ = procCreateWindowExW.Call(
+		wsExTopmost|wsExToolWindow,
+		uintptr(unsafe.Pointer(className)),
+		uintptr(unsafe.Pointer(utf16Ptr("Domain VPN Router"))),
+		wsPopup|wsVisible,
+		uintptr(left), uintptr(top),
+		uintptr(width), uintptr(height),
+		r.hwnd, 0, instance, 0,
 	)
-	if command != 0 {
-		r.handleCommand(int(command))
+	if r.menuHwnd != 0 {
+		procSetForeground.Call(r.menuHwnd)
 	}
 }
 
@@ -536,8 +521,16 @@ func (r *runner) handleCommand(command int) {
 			}
 			r.invalidate()
 		}()
-	case cmdShow:
-		r.showWindow()
+	case cmdRefreshStatus:
+		r.notice = "正在刷新网卡状态..."
+		r.invalidateMenu()
+		go func() {
+			status := r.controller.RefreshStatus(context.Background())
+			r.updateStatus(status, false)
+			r.notice = "网卡状态已刷新"
+			r.invalidateMenu()
+			r.invalidate()
+		}()
 	case cmdExit:
 		r.cancel()
 		procDestroyWindow.Call(r.hwnd)
@@ -554,45 +547,60 @@ func (r *runner) paintTrayMenu(hwnd uintptr) {
 	status := r.currentStatus()
 	r.menuHits = nil
 
-	fillRect(hdc, rc, rgb(8, 12, 22))
+	fillRect(hdc, rc, rgb(30, 30, 30))
 	procSetBkMode.Call(hdc, transparent)
 
 	panel := rect{Left: rc.Left + 4, Top: rc.Top + 4, Right: rc.Right - 4, Bottom: rc.Bottom - 4}
-	drawRoundedFill(hdc, panel, rgb(12, 18, 34), rgb(24, 38, 72), 10)
+	drawRoundedFill(hdc, panel, rgb(30, 30, 30), rgb(30, 30, 30), 18)
 
-	drawText(hdc, "Domain VPN Router", rect{Left: panel.Left + 14, Top: panel.Top + 12, Right: panel.Right - 14, Bottom: panel.Top + 34}, 12, fwBold, rgb(200, 218, 255), dtLeft|dtSingleLine|dtNoPrefix)
-	drawText(hdc, modeTitle(status.Mode), rect{Left: panel.Left + 14, Top: panel.Top + 34, Right: panel.Right - 14, Bottom: panel.Top + 52}, 10, fwSemiBold, modeColor(status.Mode), dtLeft|dtSingleLine|dtNoPrefix)
+	drawStatusDot(hdc, panel.Left+28, panel.Top+30, status.ProxyRunning)
+	drawText(hdc, "Domain VPN Router 正在运行", rect{Left: panel.Left + 68, Top: panel.Top + 20, Right: panel.Right - 24, Bottom: panel.Top + 52}, 18, fwSemiBold, rgb(220, 230, 238), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
+	drawText(hdc, "当前模式: "+modeTitle(status.Mode), rect{Left: panel.Left + 68, Top: panel.Top + 55, Right: panel.Right - 24, Bottom: panel.Top + 84}, 14, fwNormal, modeColor(status.Mode), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
 
-	fillRect(hdc, rect{Left: panel.Left + 12, Top: panel.Top + 58, Right: panel.Right - 12, Bottom: panel.Top + 59}, rgb(24, 38, 72))
+	top := panel.Top + 104
+	r.drawTrayInfoLine(hdc, rect{Left: panel.Left + 24, Top: top, Right: panel.Right - 24, Bottom: top + 34}, "物理网卡", emptyText(status.PhysicalIP, "未检测"))
+	r.drawTrayInfoLine(hdc, rect{Left: panel.Left + 24, Top: top + 38, Right: panel.Right - 24, Bottom: top + 72}, "Clash", statusLine(status.ClashUp))
+	r.drawTrayInfoLine(hdc, rect{Left: panel.Left + 24, Top: top + 76, Right: panel.Right - 24, Bottom: top + 110}, "GP VPN", statusLine(status.GlobalUp))
+	r.drawTrayInfoLine(hdc, rect{Left: panel.Left + 24, Top: top + 114, Right: panel.Right - 24, Bottom: top + 148}, "刷新时间", formatRefreshTime(status.RefreshedAt))
 
-	top := panel.Top + 66
-	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top, Right: panel.Right - 8, Bottom: top + 28}, "自动分流", "AUTO", status.Mode == app.ModeAuto, cmdAuto)
-	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top + 31, Right: panel.Right - 8, Bottom: top + 59}, "强制 Clash", "CV", status.Mode == app.ModeClash, cmdClash)
-	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top + 62, Right: panel.Right - 8, Bottom: top + 90}, "强制 GlobalProtect", "GP", status.Mode == app.ModeGlobalProtect, cmdGlobalProtect)
-	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top + 93, Right: panel.Right - 8, Bottom: top + 121}, "本地直连", "DIR", status.Mode == app.ModeDirect, cmdDirect)
+	fillRect(hdc, rect{Left: panel.Left, Top: top + 164, Right: panel.Right, Bottom: top + 165}, rgb(74, 74, 74))
+	menuTop := top + 182
+	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 10, Top: menuTop, Right: panel.Right - 10, Bottom: menuTop + 44}, "刷新网卡状态", "↻", false, cmdRefreshStatus)
+	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 10, Top: menuTop + 48, Right: panel.Right - 10, Bottom: menuTop + 92}, "自动分流", "A", status.Mode == app.ModeAuto, cmdAuto)
+	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 10, Top: menuTop + 96, Right: panel.Right - 10, Bottom: menuTop + 140}, "强制 Clash", "C", status.Mode == app.ModeClash, cmdClash)
+	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 10, Top: menuTop + 144, Right: panel.Right - 10, Bottom: menuTop + 188}, "强制 GlobalProtect", "G", status.Mode == app.ModeGlobalProtect, cmdGlobalProtect)
+	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 10, Top: menuTop + 192, Right: panel.Right - 10, Bottom: menuTop + 236}, "本地直连", "D", status.Mode == app.ModeDirect, cmdDirect)
 
-	fillRect(hdc, rect{Left: panel.Left + 12, Top: top + 132, Right: panel.Right - 12, Bottom: top + 133}, rgb(24, 38, 72))
-	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top + 142, Right: panel.Right - 8, Bottom: top + 170}, "打开主窗口", "OPEN", false, cmdShow)
-	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top + 173, Right: panel.Right - 8, Bottom: top + 201}, "恢复系统代理", "FIX", false, cmdRestoreProxy)
-	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 8, Top: top + 204, Right: panel.Right - 8, Bottom: top + 232}, "退出", "EXIT", false, cmdExit)
+	fillRect(hdc, rect{Left: panel.Left, Top: menuTop + 254, Right: panel.Right, Bottom: menuTop + 255}, rgb(74, 74, 74))
+	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 10, Top: menuTop + 272, Right: panel.Right - 10, Bottom: menuTop + 316}, "恢复系统代理", "R", false, cmdRestoreProxy)
+	r.drawTrayMenuItem(hdc, rect{Left: panel.Left + 10, Top: menuTop + 320, Right: panel.Right - 10, Bottom: menuTop + 364}, "退出", "⏻", false, cmdExit)
+
+	if r.notice != "" {
+		drawText(hdc, r.notice, rect{Left: panel.Left + 24, Top: panel.Bottom - 42, Right: panel.Right - 24, Bottom: panel.Bottom - 14}, 14, fwSemiBold, rgb(90, 180, 255), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
+	}
 }
 
 func (r *runner) drawTrayMenuItem(hdc uintptr, rc rect, label, tag string, active bool, command int) {
-	bg := rgb(12, 18, 34)
-	fg := rgb(140, 168, 218)
-	tagColor := rgb(45, 68, 115)
+	bg := rgb(30, 30, 30)
+	fg := rgb(242, 244, 246)
+	tagColor := rgb(160, 166, 174)
 	if active {
-		bg = rgb(0, 36, 54)
-		fg = rgb(0, 200, 248)
-		tagColor = rgb(0, 160, 205)
+		bg = rgb(43, 43, 43)
+		fg = rgb(88, 205, 118)
+		tagColor = rgb(88, 205, 118)
 	}
-	drawRoundedFill(hdc, rc, bg, bg, 6)
+	drawRoundedFill(hdc, rc, bg, bg, 8)
 	if active {
-		fillRounded(hdc, rect{Left: rc.Left, Top: rc.Top + 4, Right: rc.Left + 3, Bottom: rc.Bottom - 4}, rgb(0, 200, 248), 2)
+		fillRounded(hdc, rect{Left: rc.Left + 6, Top: rc.Top + 14, Right: rc.Left + 14, Bottom: rc.Top + 22}, rgb(88, 205, 118), 4)
 	}
-	drawText(hdc, tag, rect{Left: rc.Left + 10, Top: rc.Top + 7, Right: rc.Left + 52, Bottom: rc.Bottom - 5}, 9, fwBold, tagColor, dtLeft|dtSingleLine|dtNoPrefix)
-	drawText(hdc, label, rect{Left: rc.Left + 58, Top: rc.Top + 5, Right: rc.Right - 10, Bottom: rc.Bottom - 5}, 12, fwSemiBold, fg, dtLeft|dtVCenter|dtSingleLine|dtEndEllipsis|dtNoPrefix)
+	drawText(hdc, tag, rect{Left: rc.Left + 20, Top: rc.Top, Right: rc.Left + 58, Bottom: rc.Bottom}, 17, fwBold, tagColor, dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
+	drawText(hdc, label, rect{Left: rc.Left + 78, Top: rc.Top, Right: rc.Right - 18, Bottom: rc.Bottom}, 17, fwSemiBold, fg, dtLeft|dtVCenter|dtSingleLine|dtEndEllipsis|dtNoPrefix)
 	r.menuHits = append(r.menuHits, hitTarget{Rect: rc, Action: command})
+}
+
+func (r *runner) drawTrayInfoLine(hdc uintptr, rc rect, label, value string) {
+	drawText(hdc, label, rect{Left: rc.Left, Top: rc.Top, Right: rc.Left + 122, Bottom: rc.Bottom}, 14, fwSemiBold, rgb(150, 158, 168), dtLeft|dtVCenter|dtSingleLine|dtNoPrefix)
+	drawText(hdc, value, rect{Left: rc.Left + 128, Top: rc.Top, Right: rc.Right, Bottom: rc.Bottom}, 14, fwSemiBold, rgb(232, 236, 240), dtRight|dtVCenter|dtSingleLine|dtEndEllipsis|dtNoPrefix)
 }
 
 func (r *runner) handleMenuClick(p point) {
@@ -602,6 +610,10 @@ func (r *runner) handleMenuClick(p point) {
 			continue
 		}
 		command := hit.Action
+		if command == cmdRefreshStatus {
+			r.handleCommand(command)
+			return
+		}
 		r.closeMenu()
 		r.handleCommand(command)
 		return
@@ -611,6 +623,8 @@ func (r *runner) handleMenuClick(p point) {
 func (r *runner) applyModeAsync(mode app.Mode) {
 	go func() {
 		_ = r.controller.ApplyMode(context.Background(), mode)
+		r.updateStatus(r.controller.StatusSnapshot(), true)
+		r.invalidateMenu()
 		r.invalidate()
 	}()
 }
@@ -626,6 +640,9 @@ func (r *runner) handleClick(p point) {
 			r.view = viewStatus
 		case hitTabLogs:
 			r.view = viewLogs
+			status := r.controller.StatusSnapshot()
+			r.updateStatus(status, true)
+			r.logsLoadedAt = time.Now()
 		case hitTabSettings:
 			r.view = viewSettings
 			r.settingsBindIP = r.controller.DirectBindIP()
@@ -653,6 +670,15 @@ func (r *runner) handleClick(p point) {
 			} else {
 				r.notice = "设置已保存并立即生效"
 			}
+		case hitRefreshStatus:
+			r.notice = "正在刷新网卡状态..."
+			r.invalidate()
+			go func() {
+				status := r.controller.RefreshStatus(context.Background())
+				r.updateStatus(status, false)
+				r.notice = "网卡状态已刷新"
+				r.invalidate()
+			}()
 		case hitRestoreProxy:
 			go func() {
 				if err := r.controller.RestoreProxy(); err != nil {
@@ -682,6 +708,7 @@ func (r *runner) openConfig() {
 }
 
 func (r *runner) showWindow() {
+	r.updateStatus(r.controller.StatusSnapshot(), true)
 	procSetWindowTextW.Call(r.hwnd, uintptr(unsafe.Pointer(utf16Ptr("Domain VPN Router"))))
 	procShowWindow.Call(r.hwnd, swShow)
 	procUpdateWindow.Call(r.hwnd)
@@ -692,35 +719,10 @@ func (r *runner) invalidate() {
 	procInvalidateRect.Call(r.hwnd, 0, 1)
 }
 
-func (r *runner) startStatusRefresh() {
-	go func() {
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-r.ctx.Done():
-				return
-			case <-ticker.C:
-				r.updateStatus(r.controller.StatusSnapshot(), true)
-				r.invalidate()
-			}
-		}
-	}()
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		r.updateStatus(r.controller.Status(context.Background()), false)
-		r.invalidate()
-		for {
-			select {
-			case <-r.ctx.Done():
-				return
-			case <-ticker.C:
-				r.updateStatus(r.controller.Status(context.Background()), false)
-				r.invalidate()
-			}
-		}
-	}()
+func (r *runner) invalidateMenu() {
+	if r.menuHwnd != 0 {
+		procInvalidateRect.Call(r.menuHwnd, 0, 1)
+	}
 }
 
 func (r *runner) updateStatus(status app.Status, keepVPN bool) {
@@ -792,7 +794,7 @@ func (r *runner) paint() {
 	title := "状态总览"
 	subtitle := "实时监控路由状态，点击模式按钮即可切换"
 	if r.view == viewLogs {
-		title = "实时日志"
+		title = "最近日志"
 		subtitle = "查看最近访问、路由动作和错误信息"
 	} else if r.view == viewSettings {
 		title = "设置"
@@ -814,26 +816,34 @@ func (r *runner) paint() {
 
 func (r *runner) drawStatusPage(hdc uintptr, rc rect, status app.Status) {
 	gap := int32(12)
-	cardWidth := (rc.Right - rc.Left - gap*2) / 3
+	hero := rect{Left: rc.Left, Top: rc.Top, Right: rc.Right, Bottom: rc.Top + 112}
+	drawCard(hdc, hero)
+	drawText(hdc, "后台面板", rect{Left: hero.Left + 20, Top: hero.Top + 16, Right: hero.Right - 220, Bottom: hero.Top + 44}, 18, fwBold, rgb(200, 218, 255), dtLeft|dtSingleLine|dtNoPrefix)
+	drawText(hdc, "按需刷新网卡状态，代理请求路径不做轮询检测", rect{Left: hero.Left + 20, Top: hero.Top + 48, Right: hero.Right - 220, Bottom: hero.Top + 72}, 11, fwNormal, rgb(70, 98, 150), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
+	drawText(hdc, "刷新时间: "+formatRefreshTime(status.RefreshedAt), rect{Left: hero.Left + 20, Top: hero.Top + 76, Right: hero.Right - 220, Bottom: hero.Top + 100}, 11, fwSemiBold, rgb(0, 155, 95), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
+	r.drawActionButton(hdc, rect{Left: hero.Right - 184, Top: hero.Top + 34, Right: hero.Right - 20, Bottom: hero.Top + 78}, "刷新网卡状态", rgb(0, 95, 150), hitRefreshStatus)
 
-	drawMetricCard(hdc, rect{Left: rc.Left, Top: rc.Top, Right: rc.Left + cardWidth, Bottom: rc.Top + 88}, "代理监听", status.ProxyListen, "NET", status.ProxyRunning)
-	drawMetricCard(hdc, rect{Left: rc.Left + cardWidth + gap, Top: rc.Top, Right: rc.Left + cardWidth*2 + gap, Bottom: rc.Top + 88}, "直连绑定", emptyText(status.DirectBindIP, "自动"), "IP", status.DirectBindIP != "")
-	drawMetricCard(hdc, rect{Left: rc.Left + cardWidth*2 + gap*2, Top: rc.Top, Right: rc.Right, Bottom: rc.Top + 88}, "系统代理", boolText(status.SystemProxyOn), "SYS", status.SystemProxyOn)
+	cardTop := hero.Bottom + 14
+	cardWidth := (rc.Right - rc.Left - gap*3) / 4
+	drawMetricCard(hdc, rect{Left: rc.Left, Top: cardTop, Right: rc.Left + cardWidth, Bottom: cardTop + 88}, "代理监听", status.ProxyListen, "NET", status.ProxyRunning)
+	drawMetricCard(hdc, rect{Left: rc.Left + (cardWidth+gap)*1, Top: cardTop, Right: rc.Left + (cardWidth+gap)*1 + cardWidth, Bottom: cardTop + 88}, "物理网卡 IP", emptyText(status.PhysicalIP, "未检测"), "LAN", status.PhysicalIP != "")
+	drawMetricCard(hdc, rect{Left: rc.Left + (cardWidth+gap)*2, Top: cardTop, Right: rc.Left + (cardWidth+gap)*2 + cardWidth, Bottom: cardTop + 88}, "Clash Verge", statusLine(status.ClashUp), "CV", status.ClashUp)
+	drawMetricCard(hdc, rect{Left: rc.Left + (cardWidth+gap)*3, Top: cardTop, Right: rc.Right, Bottom: cardTop + 88}, "GlobalProtect", statusLine(status.GlobalUp), "GP", status.GlobalUp)
 
-	modeTop := rc.Top + 106
+	modeTop := cardTop + 108
 	buttonWidth := (rc.Right - rc.Left - gap*3) / 4
 	r.drawModeButton(hdc, rect{Left: rc.Left, Top: modeTop, Right: rc.Left + buttonWidth, Bottom: modeTop + 88}, "AUTO", "自动分流", "按域名规则选择", status.Mode == app.ModeAuto, hitModeAuto)
 	r.drawModeButton(hdc, rect{Left: rc.Left + (buttonWidth+gap)*1, Top: modeTop, Right: rc.Left + (buttonWidth+gap)*1 + buttonWidth, Bottom: modeTop + 88}, "CV", "强制 Clash", "全部外网走 Clash", status.Mode == app.ModeClash, hitModeClash)
 	r.drawModeButton(hdc, rect{Left: rc.Left + (buttonWidth+gap)*2, Top: modeTop, Right: rc.Left + (buttonWidth+gap)*2 + buttonWidth, Bottom: modeTop + 88}, "GP", "强制 GP", "全部公网走公司 VPN", status.Mode == app.ModeGlobalProtect, hitModeGlobalProtect)
 	r.drawModeButton(hdc, rect{Left: rc.Left + (buttonWidth+gap)*3, Top: modeTop, Right: rc.Right, Bottom: modeTop + 88}, "DIR", "本地直连", "关闭系统代理", status.Mode == app.ModeDirect, hitModeDirect)
 
-	vpnTop := modeTop + 104
-	vpnWidth := (rc.Right - rc.Left - gap) / 2
-	drawVPNCard(hdc, rect{Left: rc.Left, Top: vpnTop, Right: rc.Left + vpnWidth, Bottom: vpnTop + 78}, "Clash Verge", status.ClashUp, "CV")
-	drawVPNCard(hdc, rect{Left: rc.Left + vpnWidth + gap, Top: vpnTop, Right: rc.Right, Bottom: vpnTop + 78}, "GlobalProtect", status.GlobalUp, "GP")
+	infoTop := modeTop + 108
+	infoWidth := (rc.Right - rc.Left - gap) / 2
+	drawRouteInfoCard(hdc, rect{Left: rc.Left, Top: infoTop, Right: rc.Left + infoWidth, Bottom: infoTop + 92}, "直连出口", emptyText(status.PhysicalIP, "系统默认路由"), "普通直连和本地网络使用此出口")
+	drawRouteInfoCard(hdc, rect{Left: rc.Left + infoWidth + gap, Top: infoTop, Right: rc.Right, Bottom: infoTop + 92}, "系统代理", boolText(status.SystemProxyOn), "浏览器流量先进入本地分流代理")
 
 	if status.LastError != "" {
-		drawAlert(hdc, rect{Left: rc.Left, Top: vpnTop + 94, Right: rc.Right, Bottom: vpnTop + 140}, status.LastError)
+		drawAlert(hdc, rect{Left: rc.Left, Top: infoTop + 108, Right: rc.Right, Bottom: infoTop + 154}, status.LastError)
 	}
 }
 
@@ -843,7 +853,7 @@ func (r *runner) drawLogsPage(hdc uintptr, rc rect, status app.Status) {
 		drawAlert(hdc, rect{Left: rc.Left, Top: logTop, Right: rc.Right, Bottom: logTop + 50}, status.LastError)
 		logTop += 64
 	}
-	drawLogPanel(hdc, rect{Left: rc.Left, Top: logTop, Right: rc.Right, Bottom: rc.Bottom}, status.Logs)
+	drawLogPanel(hdc, rect{Left: rc.Left, Top: logTop, Right: rc.Right, Bottom: rc.Bottom}, status.Logs, r.logsLoadedAt)
 }
 
 func (r *runner) drawSettingsPage(hdc uintptr, rc rect, status app.Status) {
@@ -868,6 +878,7 @@ func (r *runner) drawSettingsPage(hdc uintptr, rc rect, status app.Status) {
 	drawText(hdc, "维护操作", rect{Left: rc.Left + 20, Top: maintTop + 16, Right: rc.Right - 20, Bottom: maintTop + 42}, 15, fwBold, rgb(200, 218, 255), dtLeft|dtSingleLine|dtNoPrefix)
 	r.drawSecondaryButton(hdc, rect{Left: rc.Left + 20, Top: maintTop + 54, Right: rc.Left + 196, Bottom: maintTop + 90}, "恢复系统代理", hitRestoreProxy)
 	r.drawSecondaryButton(hdc, rect{Left: rc.Left + 210, Top: maintTop + 54, Right: rc.Left + 386, Bottom: maintTop + 90}, "打开配置文件", hitOpenConfig)
+	r.drawSecondaryButton(hdc, rect{Left: rc.Left + 400, Top: maintTop + 54, Right: rc.Left + 576, Bottom: maintTop + 90}, "刷新网卡状态", hitRefreshStatus)
 
 	infoTop := maintTop + 126
 	drawText(hdc, "当前配置", rect{Left: rc.Left, Top: infoTop, Right: rc.Right, Bottom: infoTop + 22}, 13, fwBold, rgb(100, 130, 185), dtLeft|dtSingleLine|dtNoPrefix)
@@ -876,27 +887,6 @@ func (r *runner) drawSettingsPage(hdc uintptr, rc rect, status app.Status) {
 
 	if r.notice != "" {
 		drawText(hdc, r.notice, rect{Left: rc.Left, Top: rc.Bottom - 26, Right: rc.Right, Bottom: rc.Bottom}, 11, fwSemiBold, rgb(0, 195, 120), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
-	}
-}
-
-func appendMenu(menu uintptr, flags uintptr, id uintptr, text string) {
-	var label uintptr
-	if text != "" {
-		label = uintptr(unsafe.Pointer(utf16Ptr(text)))
-	}
-	procAppendMenuW.Call(menu, flags, id, label)
-}
-
-func modeCommand(mode app.Mode) uintptr {
-	switch mode {
-	case app.ModeClash:
-		return cmdClash
-	case app.ModeGlobalProtect:
-		return cmdGlobalProtect
-	case app.ModeDirect:
-		return cmdDirect
-	default:
-		return cmdAuto
 	}
 }
 
@@ -978,16 +968,27 @@ func drawVPNCard(hdc uintptr, rc rect, name string, up bool, icon string) {
 	drawText(hdc, statusLine(up), rect{Left: rc.Left + 82, Top: rc.Top + 42, Right: rc.Right - 14, Bottom: rc.Top + 66}, 12, fwSemiBold, statusColor(up), dtLeft|dtSingleLine|dtNoPrefix)
 }
 
+func drawRouteInfoCard(hdc uintptr, rc rect, title, value, subtitle string) {
+	drawCard(hdc, rc)
+	drawText(hdc, title, rect{Left: rc.Left + 16, Top: rc.Top + 14, Right: rc.Right - 16, Bottom: rc.Top + 36}, 11, fwSemiBold, rgb(70, 98, 150), dtLeft|dtSingleLine|dtNoPrefix)
+	drawText(hdc, value, rect{Left: rc.Left + 16, Top: rc.Top + 38, Right: rc.Right - 16, Bottom: rc.Top + 62}, 15, fwBold, rgb(148, 178, 235), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
+	drawText(hdc, subtitle, rect{Left: rc.Left + 16, Top: rc.Top + 64, Right: rc.Right - 16, Bottom: rc.Top + 84}, 10, fwNormal, rgb(42, 62, 105), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
+}
+
 func drawAlert(hdc uintptr, rc rect, message string) {
 	drawRoundedFill(hdc, rc, rgb(38, 10, 10), rgb(85, 22, 22), 10)
 	drawText(hdc, "!", rect{Left: rc.Left + 16, Top: rc.Top + 10, Right: rc.Left + 42, Bottom: rc.Bottom - 10}, 18, fwBold, rgb(235, 58, 58), dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
 	drawText(hdc, "错误: "+message, rect{Left: rc.Left + 50, Top: rc.Top + 14, Right: rc.Right - 14, Bottom: rc.Bottom - 10}, 12, fwSemiBold, rgb(210, 90, 90), dtLeft|dtSingleLine|dtEndEllipsis|dtNoPrefix)
 }
 
-func drawLogPanel(hdc uintptr, rc rect, logs []string) {
+func drawLogPanel(hdc uintptr, rc rect, logs []string, loadedAt time.Time) {
 	drawCard(hdc, rc)
-	drawText(hdc, "实时日志", rect{Left: rc.Left + 16, Top: rc.Top + 13, Right: rc.Right - 150, Bottom: rc.Top + 38}, 15, fwBold, rgb(148, 178, 235), dtLeft|dtSingleLine|dtNoPrefix)
-	drawText(hdc, "● 每秒刷新", rect{Left: rc.Right - 148, Top: rc.Top + 15, Right: rc.Right - 14, Bottom: rc.Top + 38}, 10, fwSemiBold, rgb(0, 155, 95), dtRight|dtSingleLine|dtNoPrefix)
+	drawText(hdc, "最近日志", rect{Left: rc.Left + 16, Top: rc.Top + 13, Right: rc.Right - 220, Bottom: rc.Top + 38}, 15, fwBold, rgb(148, 178, 235), dtLeft|dtSingleLine|dtNoPrefix)
+	stamp := "点击日志页时加载"
+	if !loadedAt.IsZero() {
+		stamp = "加载于 " + loadedAt.Format("15:04:05")
+	}
+	drawText(hdc, stamp, rect{Left: rc.Right - 218, Top: rc.Top + 15, Right: rc.Right - 14, Bottom: rc.Top + 38}, 10, fwSemiBold, rgb(0, 155, 95), dtRight|dtSingleLine|dtNoPrefix)
 
 	fillRect(hdc, rect{Left: rc.Left + 12, Top: rc.Top + 44, Right: rc.Right - 12, Bottom: rc.Top + 45}, rgb(18, 28, 54))
 
@@ -1087,6 +1088,11 @@ func rgb(r, g, b byte) uintptr {
 	return uintptr(uint32(r) | uint32(g)<<8 | uint32(b)<<16)
 }
 
+func procGetSystemMetricsValue(index int32) int {
+	ret, _, _ := procGetSystemMetrics.Call(uintptr(index))
+	return int(ret)
+}
+
 func statusText(ok bool) string {
 	if ok {
 		return "运行中"
@@ -1099,6 +1105,13 @@ func statusLine(ok bool) string {
 		return "网卡已连接"
 	}
 	return "等待连接"
+}
+
+func formatRefreshTime(t time.Time) string {
+	if t.IsZero() {
+		return "尚未刷新"
+	}
+	return t.Format("15:04:05")
 }
 
 func statusColor(ok bool) uintptr {

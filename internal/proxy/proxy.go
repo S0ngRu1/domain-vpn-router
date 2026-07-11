@@ -32,6 +32,7 @@ type Server struct {
 	directBindIPStr string // 配置的静态 IP（空 = 自动检测）
 	foreignProxy    string
 	excludeAdapters []string // 动态检测时排除的网卡名称关键词
+	physicalIPCache net.IP
 	mu              sync.RWMutex
 }
 
@@ -42,6 +43,7 @@ func New(listen, directBindIP, foreignProxy string, router Router, excludeAdapte
 		foreignProxy:    strings.TrimSpace(foreignProxy),
 		excludeAdapters: excludeAdapters,
 	}
+	s.refreshPhysicalIPLocked()
 	s.server = &http.Server{
 		Addr:              listen,
 		Handler:           s,
@@ -54,6 +56,26 @@ func (s *Server) SetDirectBindIP(directBindIP string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.directBindIPStr = strings.TrimSpace(directBindIP)
+	s.refreshPhysicalIPLocked()
+}
+
+func (s *Server) RefreshPhysicalIP() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refreshPhysicalIPLocked()
+	if s.physicalIPCache == nil {
+		return ""
+	}
+	return s.physicalIPCache.String()
+}
+
+func (s *Server) CurrentPhysicalIPStr() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.physicalIPCache == nil {
+		return ""
+	}
+	return s.physicalIPCache.String()
 }
 
 func (s *Server) ListenAndServe() error {
@@ -78,8 +100,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "切换网络失败: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	log.Printf("访问目标=%s 动作=%s 规则=%s", target, match.Action, match.Rule)
-
 	if r.Method == http.MethodConnect {
 		s.handleConnect(w, r, match)
 		return
@@ -253,17 +273,29 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 	return c.Conn.Read(p)
 }
 
-// currentPhysicalIP 返回直连流量应绑定的本地 IP。
-// 优先使用配置的静态 IP（仍然有效时），否则动态扫描物理网卡。
+// currentPhysicalIP 返回启动或配置变更时缓存的物理网卡 IP，避免请求路径反复枚举网卡。
 func (s *Server) currentPhysicalIP() net.IP {
 	s.mu.RLock()
-	static := s.directBindIPStr
-	exclude := s.excludeAdapters
+	cached := cloneIP(s.physicalIPCache)
 	s.mu.RUnlock()
-	if ip := parseDirectBindIP(static); ip != nil {
-		return ip
+	return cached
+}
+
+func (s *Server) refreshPhysicalIPLocked() {
+	if ip := parseDirectBindIP(s.directBindIPStr); ip != nil {
+		s.physicalIPCache = cloneIP(ip)
+		return
 	}
-	return dynamicPhysicalIP(exclude)
+	s.physicalIPCache = cloneIP(dynamicPhysicalIP(s.excludeAdapters))
+}
+
+func cloneIP(ip net.IP) net.IP {
+	if ip == nil {
+		return nil
+	}
+	out := make(net.IP, len(ip))
+	copy(out, ip)
+	return out
 }
 
 // DynamicPhysicalIPStr 供外部查询当前动态检测到的物理网卡 IP（用于 GUI 显示）。
@@ -320,26 +352,6 @@ func copyAndReport(errc chan<- error, dst io.Writer, src io.Reader) {
 	errc <- err
 }
 
-func localIPAvailable(ip net.IP) bool {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return false
-	}
-	for _, addr := range addrs {
-		var localIP net.IP
-		switch v := addr.(type) {
-		case *net.IPNet:
-			localIP = v.IP
-		case *net.IPAddr:
-			localIP = v.IP
-		}
-		if localIP != nil && localIP.Equal(ip) {
-			return true
-		}
-	}
-	return false
-}
-
 func (s *Server) resolveAddress(ctx context.Context, address string, bindIP net.IP) (string, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
@@ -384,10 +396,5 @@ func (s *Server) resolveAddress(ctx context.Context, address string, bindIP net.
 }
 
 func parseDirectBindIP(directBindIP string) net.IP {
-	ip := net.ParseIP(strings.TrimSpace(directBindIP))
-	if ip != nil && !localIPAvailable(ip) {
-		log.Printf("直连绑定 IP %s 当前不可用，已回退到系统默认路由", ip)
-		return nil
-	}
-	return ip
+	return net.ParseIP(strings.TrimSpace(directBindIP))
 }
